@@ -63,3 +63,7 @@ class AttachmentDownloadResponse(BaseModel):
     mime_type: str
     size: int
     saved_path: str
+
+class EmailCountResponse(BaseModel):
+    """Email count response"""
+    email_count: int

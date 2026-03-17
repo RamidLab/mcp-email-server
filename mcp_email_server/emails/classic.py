@@ -26,6 +26,7 @@ from mcp_email_server.emails.models import (
     EmailContentBatchResponse,
     EmailMetadata,
     EmailMetadataPageResponse,
+    EmailCountResponse,
 )
 from mcp_email_server.log import logger
 
@@ -993,6 +994,34 @@ class ClassicEmailHandler(EmailHandler):
         )
         self.save_to_sent = email_settings.save_to_sent
         self.sent_folder_name = email_settings.sent_folder_name
+
+    async def get_emails_count(
+        self,
+        before: datetime | None = None,
+        since: datetime | None = None,
+        subject: str | None = None,
+        from_address: str | None = None,
+        to_address: str | None = None,
+        mailbox: str = "INBOX",
+        seen: bool | None = None,
+        flagged: bool | None = None,
+        answered: bool | None = None
+    ) -> EmailCountResponse:
+        total = await self.incoming_client.get_email_count(
+            before,
+            since,
+            subject,
+            from_address=from_address,
+            to_address=to_address,
+            mailbox=mailbox,
+            seen=seen,
+            flagged=flagged,
+            answered=answered,
+        )
+
+        return EmailCountResponse(
+            email_count=total
+        )
 
     async def get_emails_metadata(
         self,
