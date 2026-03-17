@@ -123,6 +123,99 @@ class TestClassicEmailHandler:
                 )
 
     @pytest.mark.asyncio
+    async def test_get_emails_count(self, classic_handler):
+        """Test the get_emails_count method."""
+        # Mock the incoming client's get_email_count method
+        mock_count = AsyncMock(return_value=42)
+
+        with patch.object(classic_handler.incoming_client, "get_email_count", mock_count):
+            # Call the method with various parameters
+            result = await classic_handler.get_emails_count(
+                before=datetime.now(timezone.utc),
+                since=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                subject="Test Subject",
+                from_address="sender@example.com",
+                to_address="recipient@example.com",
+                mailbox="INBOX",
+                seen=True,
+                flagged=False,
+                answered=None
+            )
+
+            # Verify the result
+            assert result == 42
+
+            # Verify the method was called with correct parameters
+            mock_count.assert_called_once_with(
+                datetime.now(timezone.utc),
+                datetime(2024, 1, 1, tzinfo=timezone.utc),
+                "Test Subject",
+                from_address="sender@example.com",
+                to_address="recipient@example.com",
+                mailbox="INBOX",
+                seen=True,
+                flagged=False,
+                answered=None
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_emails_count_default_params(self, classic_handler):
+        """Test get_emails_count with default parameters."""
+        mock_count = AsyncMock(return_value=100)
+
+        with patch.object(classic_handler.incoming_client, "get_email_count", mock_count):
+            # Call with minimal parameters (using defaults)
+            result = await classic_handler.get_emails_count()
+
+            assert result == 100
+
+            # Verify default parameters were used
+            mock_count.assert_called_once_with(
+                None,  # before
+                None,  # since
+                None,  # subject
+                from_address=None,
+                to_address=None,
+                mailbox="INBOX",
+                seen=None,
+                flagged=None,
+                answered=None
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_emails_count_edge_cases(self, classic_handler):
+        """Test get_emails_count with edge cases."""
+        # Test with empty result
+        mock_count = AsyncMock(return_value=0)
+
+        with patch.object(classic_handler.incoming_client, "get_email_count", mock_count):
+            result = await classic_handler.get_emails_count(
+                subject="Nonexistent Subject"
+            )
+
+            assert result == 0
+            mock_count.assert_called_once()
+
+        # Test with custom mailbox
+        mock_count = AsyncMock(return_value=5)
+
+        with patch.object(classic_handler.incoming_client, "get_email_count", mock_count):
+            result = await classic_handler.get_emails_count(
+                mailbox="Sent"
+            )
+
+            assert result == 5
+            mock_count.assert_called_once_with(
+                None, None, None,
+                from_address=None,
+                to_address=None,
+                mailbox="Sent",  # Custom mailbox
+                seen=None,
+                flagged=None,
+                answered=None
+            )
+
+    @pytest.mark.asyncio
     async def test_get_emails_with_mailbox(self, classic_handler):
         """Test get_emails method with custom mailbox."""
         now = datetime.now(timezone.utc)
