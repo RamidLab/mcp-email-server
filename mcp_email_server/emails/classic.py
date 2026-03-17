@@ -330,7 +330,12 @@ class EmailClient:
         """Fetch INTERNALDATE for a single chunk of UIDs."""
         uid_list = ",".join(uid.decode() for uid in chunk)
         chunk_start = time.perf_counter()
-        _, data = await imap.uid("fetch", uid_list, "(INTERNALDATE)")
+
+        try:
+            _, data = await imap.uid("fetch", uid_list, "(INTERNALDATE)")
+        except Exception as e:
+            logger.error(f"Error fetching dates chunk {chunk_num}: {e}")
+            return {}
         chunk_elapsed = time.perf_counter() - chunk_start
 
         chunk_dates: dict[str, datetime] = {}
@@ -350,29 +355,22 @@ class EmailClient:
         return chunk_dates
 
     async def _batch_fetch_dates(
-        self,
-        imap: aioimaplib.IMAP4_SSL | aioimaplib.IMAP4,
-        email_ids: list[bytes],
-        chunk_size: int = 5000,
+            self,
+            imap: aioimaplib.IMAP4_SSL | aioimaplib.IMAP4,
+            email_ids: list[bytes],
+            chunk_size: int = 5000,
     ) -> dict[str, datetime]:
-        """Batch fetch INTERNALDATE for all UIDs in parallel chunks."""
         if not email_ids:
             return {}
 
-        # Split into chunks
-        chunks = [email_ids[i : i + chunk_size] for i in range(0, len(email_ids), chunk_size)]
+        chunks = [email_ids[i:i + chunk_size] for i in range(0, len(email_ids), chunk_size)]
         total_chunks = len(chunks)
 
-        # Fetch all chunks in parallel
-        tasks = [
-            self._fetch_dates_chunk(imap, chunk, chunk_num, total_chunks) for chunk_num, chunk in enumerate(chunks, 1)
-        ]
-        results = await asyncio.gather(*tasks)
-
-        # Merge results
         uid_dates: dict[str, datetime] = {}
-        for chunk_dates in results:
+        for chunk_num, chunk in enumerate(chunks, 1):
+            chunk_dates = await self._fetch_dates_chunk(imap, chunk, chunk_num, total_chunks)
             uid_dates.update(chunk_dates)
+            await asyncio.sleep(0.05)
 
         return uid_dates
 
@@ -510,6 +508,7 @@ class EmailClient:
             # Phase 1: Batch fetch INTERNALDATE for sorting (parallel chunks)
             fetch_dates_start = time.perf_counter()
             uid_dates = await self._batch_fetch_dates(imap, email_ids)
+            await asyncio.sleep(0.2)
             fetch_dates_elapsed = time.perf_counter() - fetch_dates_start
 
             # Sort by INTERNALDATE
@@ -526,6 +525,7 @@ class EmailClient:
             # Phase 2: Batch fetch headers for requested page only
             fetch_headers_start = time.perf_counter()
             metadata_by_uid = await self._batch_fetch_headers(imap, page_uids)
+            await asyncio.sleep(0.2)
             fetch_headers_elapsed = time.perf_counter() - fetch_headers_start
 
             logger.info(
@@ -539,9 +539,15 @@ class EmailClient:
                     yield metadata_by_uid[uid]
         finally:
             try:
+                # 尝试发送 NOOP，可能刷新未决响应
+                await imap.noop()
+                await asyncio.sleep(0.2)
                 await imap.logout()
             except Exception as e:
                 logger.info(f"Error during logout: {e}")
+                # 如果仍有协议异常，直接关闭传输层
+                if hasattr(imap, 'transport') and imap.transport and not imap.transport.is_closing():
+                    imap.transport.close()
 
     def _check_email_content(self, data: list) -> bool:
         """Check if the fetched data contains actual email content."""
