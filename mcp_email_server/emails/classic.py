@@ -27,6 +27,7 @@ from mcp_email_server.emails.models import (
     EmailMetadata,
     EmailMetadataPageResponse,
     EmailCountResponse,
+    EmailUIDResponse,
 )
 from mcp_email_server.log import logger
 
@@ -449,6 +450,49 @@ class EmailClient:
             # Search for messages and count them - use UID SEARCH for consistency
             _, messages = await imap.uid_search(*search_criteria)
             return len(messages[0].split())
+        finally:
+            # Ensure we logout properly
+            try:
+                await imap.logout()
+            except Exception as e:
+                logger.info(f"Error during logout: {e}")
+
+    async def get_email_uid(
+        self,
+        before: datetime | None = None,
+        since: datetime | None = None,
+        subject: str | None = None,
+        from_address: str | None = None,
+        to_address: str | None = None,
+        mailbox: str = "INBOX",
+        seen: bool | None = None,
+        flagged: bool | None = None,
+        answered: bool | None = None,
+    ) -> list[int]:
+        imap = self._imap_connect()
+        try:
+            # Wait for the connection to be established
+            await imap._client_task
+            await imap.wait_hello_from_server()
+
+            # Login and select inbox
+            await imap.login(self.email_server.user_name, self.email_server.password)
+            await _send_imap_id(imap)
+            await imap.select(_quote_mailbox(mailbox))
+            search_criteria = self._build_search_criteria(
+                before,
+                since,
+                subject,
+                from_address=from_address,
+                to_address=to_address,
+                seen=seen,
+                flagged=flagged,
+                answered=answered,
+            )
+            logger.info(f"Count: Search criteria: {search_criteria}")
+            # Search for messages and count them - use UID SEARCH for consistency
+            _, messages = await imap.uid_search(*search_criteria)
+            return [int(uid.decode()) for uid in messages[0].split()]
         finally:
             # Ensure we logout properly
             try:
@@ -1028,6 +1072,35 @@ class ClassicEmailHandler(EmailHandler):
         return EmailCountResponse(
             email_count=total
         )
+
+    async def get_emails_uid(
+        self,
+        before: datetime | None = None,
+        since: datetime | None = None,
+        subject: str | None = None,
+        from_address: str | None = None,
+        to_address: str | None = None,
+        mailbox: str = "INBOX",
+        seen: bool | None = None,
+        flagged: bool | None = None,
+        answered: bool | None = None
+    ):
+        uid_list = await self.incoming_client.get_email_uid(
+            before,
+            since,
+            subject,
+            from_address=from_address,
+            to_address=to_address,
+            mailbox=mailbox,
+            seen=seen,
+            flagged=flagged,
+            answered=answered,
+        )
+
+        return EmailUIDResponse(
+            email_uid_list=uid_list
+        )
+
 
     async def get_emails_metadata(
         self,

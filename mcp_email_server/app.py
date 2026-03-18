@@ -16,6 +16,7 @@ from mcp_email_server.emails.models import (
     EmailContentBatchResponse,
     EmailMetadataPageResponse,
     EmailCountResponse,
+    EmailUIDResponse,
 )
 
 mcp = FastMCP("email")
@@ -71,6 +72,39 @@ async def get_emails_count(
         flagged=flagged,
         answered=answered,
     )
+
+@mcp.tool(description="Get the UIDs of emails that match the given filters.")
+async def get_emails_uid(
+    account_name: Annotated[str, Field(description="The name of the email account.")],
+    before: Annotated[
+        datetime | None,
+        Field(default=None, description="Count emails before this datetime (UTC)."),
+    ] = None,
+    since: Annotated[
+        datetime | None,
+        Field(default=None, description="Count emails since this datetime (UTC)."),
+    ] = None,
+    subject: Annotated[str | None, Field(default=None, description="Filter emails by subject.")] = None,
+    from_address: Annotated[str | None, Field(default=None, description="Filter emails by sender address.")] = None,
+    to_address: Annotated[str | None, Field(default=None, description="Filter emails by recipient address.")] = None,
+    mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to count emails in.")] = "INBOX",
+    seen: Annotated[bool | None, Field(default=None, description="Filter by read status.")] = None,
+    flagged: Annotated[bool | None, Field(default=None, description="Filter by flagged status.")] = None,
+    answered: Annotated[bool | None, Field(default=None, description="Filter by replied status.")] = None,
+) -> EmailUIDResponse:
+    handler = dispatch_handler(account_name)
+    return await handler.get_emails_uid(
+        before=before,
+        since=since,
+        subject=subject,
+        from_address=from_address,
+        to_address=to_address,
+        mailbox=mailbox,
+        seen=seen,
+        flagged=flagged,
+        answered=answered,
+    )
+
 @mcp.tool(
     description="List email metadata (email_id, subject, sender, recipients, date) without body content. Returns email_id for use with get_emails_content."
 )

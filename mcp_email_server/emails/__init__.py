@@ -7,7 +7,7 @@ if TYPE_CHECKING:
         AttachmentDownloadResponse,
         EmailContentBatchResponse,
         EmailMetadataPageResponse,
-        EmailCountResponse,
+        EmailCountResponse, EmailUIDResponse,
 )
 
 
@@ -27,6 +27,34 @@ class EmailHandler(abc.ABC):
     ) -> "EmailCountResponse":
         """
         Get the count of emails that match the given filters.
+
+        Args:
+            before: Filter emails before this datetime.
+            since: Filter emails since this datetime.
+            subject: Filter by subject (substring match).
+            from_address: Filter by sender address.
+            to_address: Filter by recipient address.
+            mailbox: Mailbox to search (default: 'INBOX').
+            seen: Filter by read status (True=read, False=unread, None=all).
+            flagged: Filter by flagged/starred status (True=flagged, False=unflagged, None=all).
+            answered: Filter by replied status (True=replied, False=not replied, None=all).
+        """
+
+    @abc.abstractmethod
+    async def get_emails_uid(
+            self,
+            before: datetime | None = None,
+            since: datetime | None = None,
+            subject: str | None = None,
+            from_address: str | None = None,
+            to_address: str | None = None,
+            mailbox: str = "INBOX",
+            seen: bool | None = None,
+            flagged: bool | None = None,
+            answered: bool | None = None
+    ) -> "EmailUIDResponse":
+        """
+        Get the UIDs of emails that match the given filters.
 
         Args:
             before: Filter emails before this datetime.

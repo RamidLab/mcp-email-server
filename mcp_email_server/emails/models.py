@@ -67,3 +67,7 @@ class AttachmentDownloadResponse(BaseModel):
 class EmailCountResponse(BaseModel):
     """Email count response"""
     email_count: int
+
+class EmailUIDResponse(BaseModel):
+    """Email count response"""
+    email_uid_list: list[int]
