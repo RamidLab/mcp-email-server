@@ -256,6 +256,23 @@ class EmailClient:
         return f'"{sanitized}"'
 
     @staticmethod
+    def validate_pagination_params(page, page_size, total, order):
+        """验证分页参数：要么全部提供，要么全部为None"""
+        params = [page, page_size, total, order]
+
+        # 检查是否全部为None
+        all_none = all(param is None for param in params)
+
+        # 检查是否全部不为None
+        all_provided = all(param is not None for param in params)
+
+        if not (all_none or all_provided):
+            raise ValueError("分页参数必须全部提供或全部为None")
+
+        if all_provided and (page <= 0 or page_size <= 0 or total <= 0):
+                raise ValueError("分页参数必须大于0")
+
+    @staticmethod
     def _build_search_criteria(
         before: datetime | None = None,
         since: datetime | None = None,
@@ -504,6 +521,7 @@ class EmailClient:
         self,
         page: int = 1,
         page_size: int = 10,
+        total: int | None = None,
         before: datetime | None = None,
         since: datetime | None = None,
         subject: str | None = None,
@@ -549,22 +567,12 @@ class EmailClient:
             email_ids = messages[0].split()
             logger.info(f"Found {len(email_ids)} email IDs")
 
-            # Phase 1: Batch fetch INTERNALDATE for sorting (parallel chunks)
-            fetch_dates_start = time.perf_counter()
-            uid_dates = await self._batch_fetch_dates(imap, email_ids)
-            await asyncio.sleep(0.2)
-            fetch_dates_elapsed = time.perf_counter() - fetch_dates_start
+            sorted_uids = sorted([int(uid.decode()) for uid in email_ids], reverse=(order == "desc"))
 
-            # Sort by INTERNALDATE
-            sorted_uids = sorted(uid_dates.items(), key=lambda x: x[1], reverse=(order == "desc"))
-
-            # Paginate
-            start = (page - 1) * page_size
-            page_uids = [uid for uid, _ in sorted_uids[start : start + page_size]]
-
-            if not page_uids:
-                logger.info(f"Phase 1 (dates): {len(uid_dates)} UIDs in {fetch_dates_elapsed:.2f}s, page {page} empty")
-                return
+            self.validate_pagination_params(page, page_size, total, order)
+            min_uid = (page - 1) * page_size
+            max_uid = min_uid + page_size
+            page_uids = [str(x) for x in sorted_uids[min_uid:max_uid]]
 
             # Phase 2: Batch fetch headers for requested page only
             fetch_headers_start = time.perf_counter()
@@ -573,7 +581,6 @@ class EmailClient:
             fetch_headers_elapsed = time.perf_counter() - fetch_headers_start
 
             logger.info(
-                f"Fetched page {page}: {fetch_dates_elapsed:.2f}s dates ({len(uid_dates)} UIDs), "
                 f"{fetch_headers_elapsed:.2f}s headers ({len(page_uids)} UIDs)"
             )
 
@@ -1118,9 +1125,23 @@ class ClassicEmailHandler(EmailHandler):
         answered: bool | None = None,
     ) -> EmailMetadataPageResponse:
         emails = []
+
+        total = await self.incoming_client.get_email_count(
+            before,
+            since,
+            subject,
+            from_address=from_address,
+            to_address=to_address,
+            mailbox=mailbox,
+            seen=seen,
+            flagged=flagged,
+            answered=answered,
+        )
+
         async for email_data in self.incoming_client.get_emails_metadata_stream(
             page,
             page_size,
+            total,
             before,
             since,
             subject,
@@ -1133,17 +1154,7 @@ class ClassicEmailHandler(EmailHandler):
             answered,
         ):
             emails.append(EmailMetadata.from_email(email_data))
-        total = await self.incoming_client.get_email_count(
-            before,
-            since,
-            subject,
-            from_address=from_address,
-            to_address=to_address,
-            mailbox=mailbox,
-            seen=seen,
-            flagged=flagged,
-            answered=answered,
-        )
+
         return EmailMetadataPageResponse(
             page=page,
             page_size=page_size,
