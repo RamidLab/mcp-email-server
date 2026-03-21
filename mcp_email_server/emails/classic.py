@@ -338,60 +338,6 @@ class EmailClient:
             logger.error(f"Error parsing email headers: {e!s}")
             return None
 
-    async def _fetch_dates_chunk(
-        self,
-        imap: aioimaplib.IMAP4_SSL | aioimaplib.IMAP4,
-        chunk: list[bytes],
-        chunk_num: int,
-        total_chunks: int,
-    ) -> dict[str, datetime]:
-        """Fetch INTERNALDATE for a single chunk of UIDs."""
-        uid_list = ",".join(uid.decode() for uid in chunk)
-        chunk_start = time.perf_counter()
-
-        try:
-            _, data = await imap.uid("fetch", uid_list, "(INTERNALDATE)")
-        except Exception as e:
-            logger.error(f"Error fetching dates chunk {chunk_num}: {e}")
-            return {}
-        chunk_elapsed = time.perf_counter() - chunk_start
-
-        chunk_dates: dict[str, datetime] = {}
-        for item in data:
-            if not isinstance(item, bytes) or b"INTERNALDATE" not in item:
-                continue
-            uid_match = re.search(rb"UID (\d+)", item)
-            date_match = re.search(rb'INTERNALDATE "([^"]+)"', item)
-            if uid_match and date_match:
-                uid = uid_match.group(1).decode()
-                date_str = date_match.group(1).decode().strip()
-                chunk_dates[uid] = datetime.strptime(date_str, "%d-%b-%Y %H:%M:%S %z")
-
-        if total_chunks > 1:
-            logger.info(f"Fetched dates chunk {chunk_num}/{total_chunks}: {len(chunk)} UIDs in {chunk_elapsed:.2f}s")
-
-        return chunk_dates
-
-    async def _batch_fetch_dates(
-            self,
-            imap: aioimaplib.IMAP4_SSL | aioimaplib.IMAP4,
-            email_ids: list[bytes],
-            chunk_size: int = 5000,
-    ) -> dict[str, datetime]:
-        if not email_ids:
-            return {}
-
-        chunks = [email_ids[i:i + chunk_size] for i in range(0, len(email_ids), chunk_size)]
-        total_chunks = len(chunks)
-
-        uid_dates: dict[str, datetime] = {}
-        for chunk_num, chunk in enumerate(chunks, 1):
-            chunk_dates = await self._fetch_dates_chunk(imap, chunk, chunk_num, total_chunks)
-            uid_dates.update(chunk_dates)
-            await asyncio.sleep(0.05)
-
-        return uid_dates
-
     async def _batch_fetch_headers(
         self,
         imap: aioimaplib.IMAP4_SSL | aioimaplib.IMAP4,
@@ -485,7 +431,7 @@ class EmailClient:
         seen: bool | None = None,
         flagged: bool | None = None,
         answered: bool | None = None,
-    ) -> list[int]:
+    ) -> list[str]:
         imap = self._imap_connect()
         try:
             # Wait for the connection to be established
@@ -509,7 +455,7 @@ class EmailClient:
             logger.info(f"Count: Search criteria: {search_criteria}")
             # Search for messages and count them - use UID SEARCH for consistency
             _, messages = await imap.uid_search(*search_criteria)
-            return [int(uid.decode()) for uid in messages[0].split()]
+            return [str(uid.decode()) for uid in messages[0].split()]
         finally:
             # Ensure we logout properly
             try:
@@ -643,7 +589,7 @@ class EmailClient:
 
         return None
 
-    async def get_email_body_by_id(self, email_id: str, mailbox: str = "INBOX") -> dict[str, Any] | None:
+    async def get_emails_body_by_id(self, email_ids: list[str], mailbox: str = "INBOX") -> dict[str, Any] | None:
         imap = self._imap_connect()
         try:
             # Wait for the connection to be established
@@ -655,24 +601,46 @@ class EmailClient:
             await _send_imap_id(imap)
             await imap.select(_quote_mailbox(mailbox))
 
-            # Fetch the specific email by UID
-            data = await self._fetch_email_with_formats(imap, email_id)
-            if not data:
-                logger.error(f"Failed to fetch UID {email_id} with any format")
-                return None
+            emails_content = []
+            failed_ids = []
 
-            # Extract raw email data
-            raw_email = self._extract_raw_email(data)
-            if not raw_email:
-                logger.error(f"Could not find email data in response for email ID: {email_id}")
-                return None
+            for email_id in email_ids:
+                # Fetch the specific email by UID
+                data = await self._fetch_email_with_formats(imap, email_id)
+                if not data:
+                    logger.error(f"Failed to fetch UID {email_id} with any format")
+                    failed_ids.append(email_id)
 
-            # Parse the email
-            try:
-                return self._parse_email_data(raw_email, email_id)
-            except Exception as e:
-                logger.error(f"Error parsing email: {e!s}")
-                return None
+                # Extract raw email data
+                raw_email = self._extract_raw_email(data)
+                if not raw_email:
+                    logger.error(f"Could not find email data in response for email ID: {email_id}")
+                    failed_ids.append(email_id)
+
+                # Parse the email
+                try:
+                    email_data = self._parse_email_data(raw_email, email_id)
+
+                    emails_content.append(
+                        EmailBodyResponse(
+                            email_id=email_data["email_id"],
+                            message_id=email_data.get("message_id"),
+                            subject=email_data["subject"],
+                            sender=email_data["from"],
+                            recipients=email_data["to"],
+                            date=email_data["date"],
+                            body=email_data["body"],
+                            attachments=email_data["attachments"],
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"Error parsing email: {e!s}")
+                    emails_content.append(None)
+
+            return {
+                "emails_content": emails_content,
+                "failed_ids": failed_ids,
+            }
 
         finally:
             # Ensure we logout properly
@@ -1091,7 +1059,7 @@ class ClassicEmailHandler(EmailHandler):
         seen: bool | None = None,
         flagged: bool | None = None,
         answered: bool | None = None
-    ):
+    ) -> EmailUIDResponse:
         uid_list = await self.incoming_client.get_email_uid(
             before,
             since,
@@ -1166,37 +1134,13 @@ class ClassicEmailHandler(EmailHandler):
         )
 
     async def get_emails_content(self, email_ids: list[str], mailbox: str = "INBOX") -> EmailContentBatchResponse:
-        """Batch retrieve email body content"""
-        emails = []
-        failed_ids = []
-
-        for email_id in email_ids:
-            try:
-                email_data = await self.incoming_client.get_email_body_by_id(email_id, mailbox)
-                if email_data:
-                    emails.append(
-                        EmailBodyResponse(
-                            email_id=email_data["email_id"],
-                            message_id=email_data.get("message_id"),
-                            subject=email_data["subject"],
-                            sender=email_data["from"],
-                            recipients=email_data["to"],
-                            date=email_data["date"],
-                            body=email_data["body"],
-                            attachments=email_data["attachments"],
-                        )
-                    )
-                else:
-                    failed_ids.append(email_id)
-            except Exception as e:
-                logger.error(f"Failed to retrieve email {email_id}: {e}")
-                failed_ids.append(email_id)
+        emails = await self.incoming_client.get_emails_body_by_id(email_ids, mailbox)
 
         return EmailContentBatchResponse(
-            emails=emails,
+            emails=emails["emails_content"],
             requested_count=len(email_ids),
-            retrieved_count=len(emails),
-            failed_ids=failed_ids,
+            retrieved_count=len(emails["emails_content"]),
+            failed_ids=emails["failed_ids"],
         )
 
     async def send_email(

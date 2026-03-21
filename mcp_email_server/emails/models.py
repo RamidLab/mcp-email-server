@@ -70,4 +70,4 @@ class EmailCountResponse(BaseModel):
 
 class EmailUIDResponse(BaseModel):
     """Email count response"""
-    email_uid_list: list[int]
+    email_uid_list: list[str]
