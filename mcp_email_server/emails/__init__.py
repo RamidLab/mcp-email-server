@@ -7,7 +7,9 @@ if TYPE_CHECKING:
         AttachmentDownloadResponse,
         EmailContentBatchResponse,
         EmailMetadataPageResponse,
-        EmailCountResponse, EmailUIDResponse,
+        EmailCountResponse,
+        EmailUIDResponse,
+        UtilResponse,
 )
 
 
@@ -106,6 +108,12 @@ class EmailHandler(abc.ABC):
     async def get_emails_content(self, email_ids: list[str], mailbox: str = "INBOX") -> "EmailContentBatchResponse":
         """
         Get full content (including body) of multiple emails by their email IDs (IMAP UIDs)
+        """
+
+    @abc.abstractmethod
+    async def cache_emails(self) -> "UtilResponse":
+        """
+        Cache all emails in the specified account.
         """
 
     @abc.abstractmethod

@@ -1,11 +1,13 @@
 import asyncio
 import email.utils
+import json
 import mimetypes
+import os
 import re
 import ssl
 import time
 from collections.abc import AsyncGenerator
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from email.header import Header
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
@@ -15,6 +17,7 @@ from email.policy import default
 from pathlib import Path
 from typing import Any
 
+import aiofiles
 import aioimaplib
 import aiosmtplib
 
@@ -28,6 +31,7 @@ from mcp_email_server.emails.models import (
     EmailMetadataPageResponse,
     EmailCountResponse,
     EmailUIDResponse,
+    UtilResponse,
 )
 from mcp_email_server.log import logger
 
@@ -270,20 +274,20 @@ class EmailClient:
             raise ValueError("分页参数必须全部提供或全部为None")
 
         if all_provided and (page <= 0 or page_size <= 0 or total <= 0):
-                raise ValueError("分页参数必须大于0")
+            raise ValueError("分页参数必须大于0")
 
     @staticmethod
     def _build_search_criteria(
-        before: datetime | None = None,
-        since: datetime | None = None,
-        subject: str | None = None,
-        body: str | None = None,
-        text: str | None = None,
-        from_address: str | None = None,
-        to_address: str | None = None,
-        seen: bool | None = None,
-        flagged: bool | None = None,
-        answered: bool | None = None,
+            before: datetime | None = None,
+            since: datetime | None = None,
+            subject: str | None = None,
+            body: str | None = None,
+            text: str | None = None,
+            from_address: str | None = None,
+            to_address: str | None = None,
+            seen: bool | None = None,
+            flagged: bool | None = None,
+            answered: bool | None = None,
     ) -> list[str]:
         search_criteria = []
         if before:
@@ -339,9 +343,9 @@ class EmailClient:
             return None
 
     async def _batch_fetch_headers(
-        self,
-        imap: aioimaplib.IMAP4_SSL | aioimaplib.IMAP4,
-        email_ids: list[bytes] | list[str],
+            self,
+            imap: aioimaplib.IMAP4_SSL | aioimaplib.IMAP4,
+            email_ids: list[bytes] | list[str],
     ) -> dict[str, dict[str, Any]]:
         """Batch fetch headers for a list of UIDs."""
         if not email_ids:
@@ -378,16 +382,16 @@ class EmailClient:
         return results
 
     async def get_email_count(
-        self,
-        before: datetime | None = None,
-        since: datetime | None = None,
-        subject: str | None = None,
-        from_address: str | None = None,
-        to_address: str | None = None,
-        mailbox: str = "INBOX",
-        seen: bool | None = None,
-        flagged: bool | None = None,
-        answered: bool | None = None,
+            self,
+            before: datetime | None = None,
+            since: datetime | None = None,
+            subject: str | None = None,
+            from_address: str | None = None,
+            to_address: str | None = None,
+            mailbox: str = "INBOX",
+            seen: bool | None = None,
+            flagged: bool | None = None,
+            answered: bool | None = None,
     ) -> int:
         imap = self._imap_connect()
         try:
@@ -421,16 +425,16 @@ class EmailClient:
                 logger.info(f"Error during logout: {e}")
 
     async def get_email_uid(
-        self,
-        before: datetime | None = None,
-        since: datetime | None = None,
-        subject: str | None = None,
-        from_address: str | None = None,
-        to_address: str | None = None,
-        mailbox: str = "INBOX",
-        seen: bool | None = None,
-        flagged: bool | None = None,
-        answered: bool | None = None,
+            self,
+            before: datetime | None = None,
+            since: datetime | None = None,
+            subject: str | None = None,
+            from_address: str | None = None,
+            to_address: str | None = None,
+            mailbox: str = "INBOX",
+            seen: bool | None = None,
+            flagged: bool | None = None,
+            answered: bool | None = None,
     ) -> list[str]:
         imap = self._imap_connect()
         try:
@@ -464,20 +468,20 @@ class EmailClient:
                 logger.info(f"Error during logout: {e}")
 
     async def get_emails_metadata_stream(
-        self,
-        page: int = 1,
-        page_size: int = 10,
-        total: int | None = None,
-        before: datetime | None = None,
-        since: datetime | None = None,
-        subject: str | None = None,
-        from_address: str | None = None,
-        to_address: str | None = None,
-        order: str = "desc",
-        mailbox: str = "INBOX",
-        seen: bool | None = None,
-        flagged: bool | None = None,
-        answered: bool | None = None,
+            self,
+            page: int = 1,
+            page_size: int = 10,
+            total: int | None = None,
+            before: datetime | None = None,
+            since: datetime | None = None,
+            subject: str | None = None,
+            from_address: str | None = None,
+            to_address: str | None = None,
+            order: str = "desc",
+            mailbox: str = "INBOX",
+            seen: bool | None = None,
+            flagged: bool | None = None,
+            answered: bool | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         imap = self._imap_connect()
         try:
@@ -635,7 +639,7 @@ class EmailClient:
                     )
                 except Exception as e:
                     logger.error(f"Error parsing email: {e!s}")
-                    emails_content.append(None)
+                    failed_ids.append(email_id)
 
             return {
                 "emails_content": emails_content,
@@ -650,11 +654,11 @@ class EmailClient:
                 logger.info(f"Error during logout: {e}")
 
     async def download_attachment(
-        self,
-        email_id: str,
-        attachment_name: str,
-        save_path: str,
-        mailbox: str = "INBOX",
+            self,
+            email_id: str,
+            attachment_name: str,
+            save_path: str,
+            mailbox: str = "INBOX",
     ) -> dict[str, Any]:
         """Download a specific attachment from an email and save it to disk.
 
@@ -783,16 +787,16 @@ class EmailClient:
         return msg
 
     async def send_email(
-        self,
-        recipients: list[str],
-        subject: str,
-        body: str,
-        cc: list[str] | None = None,
-        bcc: list[str] | None = None,
-        html: bool = False,
-        attachments: list[str] | None = None,
-        in_reply_to: str | None = None,
-        references: str | None = None,
+            self,
+            recipients: list[str],
+            subject: str,
+            body: str,
+            cc: list[str] | None = None,
+            bcc: list[str] | None = None,
+            html: bool = False,
+            attachments: list[str] | None = None,
+            in_reply_to: str | None = None,
+            references: str | None = None,
     ):
         # Create message with or without attachments
         if attachments:
@@ -835,11 +839,11 @@ class EmailClient:
         # but will be included in the actual recipients for SMTP delivery
 
         async with aiosmtplib.SMTP(
-            hostname=self.email_server.host,
-            port=self.email_server.port,
-            start_tls=self.smtp_start_tls,
-            use_tls=self.smtp_use_tls,
-            tls_context=self._get_smtp_ssl_context(),
+                hostname=self.email_server.host,
+                port=self.email_server.port,
+                start_tls=self.smtp_start_tls,
+                use_tls=self.smtp_use_tls,
+                tls_context=self._get_smtp_ssl_context(),
         ) as smtp:
             await smtp.login(self.email_server.user_name, self.email_server.password)
 
@@ -887,10 +891,10 @@ class EmailClient:
         return None
 
     async def append_to_sent(
-        self,
-        msg: MIMEText | MIMEMultipart,
-        incoming_server: EmailServer,
-        sent_folder_name: str | None = None,
+            self,
+            msg: MIMEText | MIMEMultipart,
+            incoming_server: EmailServer,
+            sent_folder_name: str | None = None,
     ) -> bool:
         """Append a sent message to the IMAP Sent folder.
 
@@ -1020,17 +1024,65 @@ class ClassicEmailHandler(EmailHandler):
         self.save_to_sent = email_settings.save_to_sent
         self.sent_folder_name = email_settings.sent_folder_name
 
+    @staticmethod
+    async def _record_failed_uids(uids, reason="", filename='failed_emails.json'):
+        """
+        记录失败的 UID 到文件，便于后续重试。
+        :param uids: list of str or int 失败的 UID 列表
+        :param reason: 失败原因
+        :param filename: 记录文件
+        """
+        if not uids:
+            return
+
+        import json
+        import aiofiles
+        from datetime import datetime
+
+        # 读取已有失败记录（如果有）
+        existing_failed = {}
+        if os.path.exists(filename):
+            try:
+                async with aiofiles.open(filename, 'r', encoding='utf-8') as f:
+                    content = await f.read()
+                    if content.strip():
+                        existing_failed = json.loads(content)
+            except (json.JSONDecodeError, IOError):
+                existing_failed = {}
+
+        # 记录新失败的 UID，避免重复
+        timestamp = datetime.now().isoformat()
+        for uid in uids:
+            uid_str = str(uid)
+            if uid_str not in existing_failed:
+                existing_failed[uid_str] = {
+                    "uid": uid_str,
+                    "first_failed_at": timestamp,
+                    "last_failed_at": timestamp,
+                    "fail_count": 1,
+                    "last_reason": reason
+                }
+            else:
+                # 更新已有记录
+                existing_failed[uid_str]["last_failed_at"] = timestamp
+                existing_failed[uid_str]["fail_count"] += 1
+                existing_failed[uid_str]["last_reason"] = reason
+
+        # 写回文件
+        async with aiofiles.open(filename, 'w', encoding='utf-8') as f:
+            await f.write(json.dumps(existing_failed, ensure_ascii=False, indent=2))
+
     async def get_emails_count(
-        self,
-        before: datetime | None = None,
-        since: datetime | None = None,
-        subject: str | None = None,
-        from_address: str | None = None,
-        to_address: str | None = None,
-        mailbox: str = "INBOX",
-        seen: bool | None = None,
-        flagged: bool | None = None,
-        answered: bool | None = None
+            self,
+            before: datetime | None = None,
+            since: datetime | None = None,
+            subject: str | None = None,
+            from_address: str | None = None,
+            to_address: str | None = None,
+            mailbox: str = "INBOX",
+            seen: bool | None = None,
+            flagged: bool | None = None,
+            answered: bool | None = None
     ) -> EmailCountResponse:
         total = await self.incoming_client.get_email_count(
             before,
@@ -1049,16 +1101,16 @@ class ClassicEmailHandler(EmailHandler):
         )
 
     async def get_emails_uid(
-        self,
-        before: datetime | None = None,
-        since: datetime | None = None,
-        subject: str | None = None,
-        from_address: str | None = None,
-        to_address: str | None = None,
-        mailbox: str = "INBOX",
-        seen: bool | None = None,
-        flagged: bool | None = None,
-        answered: bool | None = None
+            self,
+            before: datetime | None = None,
+            since: datetime | None = None,
+            subject: str | None = None,
+            from_address: str | None = None,
+            to_address: str | None = None,
+            mailbox: str = "INBOX",
+            seen: bool | None = None,
+            flagged: bool | None = None,
+            answered: bool | None = None
     ) -> EmailUIDResponse:
         uid_list = await self.incoming_client.get_email_uid(
             before,
@@ -1076,21 +1128,20 @@ class ClassicEmailHandler(EmailHandler):
             email_uid_list=uid_list
         )
 
-
     async def get_emails_metadata(
-        self,
-        page: int = 1,
-        page_size: int = 10,
-        before: datetime | None = None,
-        since: datetime | None = None,
-        subject: str | None = None,
-        from_address: str | None = None,
-        to_address: str | None = None,
-        order: str = "desc",
-        mailbox: str = "INBOX",
-        seen: bool | None = None,
-        flagged: bool | None = None,
-        answered: bool | None = None,
+            self,
+            page: int = 1,
+            page_size: int = 10,
+            before: datetime | None = None,
+            since: datetime | None = None,
+            subject: str | None = None,
+            from_address: str | None = None,
+            to_address: str | None = None,
+            order: str = "desc",
+            mailbox: str = "INBOX",
+            seen: bool | None = None,
+            flagged: bool | None = None,
+            answered: bool | None = None,
     ) -> EmailMetadataPageResponse:
         emails = []
 
@@ -1107,19 +1158,19 @@ class ClassicEmailHandler(EmailHandler):
         )
 
         async for email_data in self.incoming_client.get_emails_metadata_stream(
-            page,
-            page_size,
-            total,
-            before,
-            since,
-            subject,
-            from_address,
-            to_address,
-            order,
-            mailbox,
-            seen,
-            flagged,
-            answered,
+                page,
+                page_size,
+                total,
+                before,
+                since,
+                subject,
+                from_address,
+                to_address,
+                order,
+                mailbox,
+                seen,
+                flagged,
+                answered,
         ):
             emails.append(EmailMetadata.from_email(email_data))
 
@@ -1144,16 +1195,16 @@ class ClassicEmailHandler(EmailHandler):
         )
 
     async def send_email(
-        self,
-        recipients: list[str],
-        subject: str,
-        body: str,
-        cc: list[str] | None = None,
-        bcc: list[str] | None = None,
-        html: bool = False,
-        attachments: list[str] | None = None,
-        in_reply_to: str | None = None,
-        references: str | None = None,
+            self,
+            recipients: list[str],
+            subject: str,
+            body: str,
+            cc: list[str] | None = None,
+            bcc: list[str] | None = None,
+            html: bool = False,
+            attachments: list[str] | None = None,
+            in_reply_to: str | None = None,
+            references: str | None = None,
     ) -> None:
         msg = await self.outgoing_client.send_email(
             recipients, subject, body, cc, bcc, html, attachments, in_reply_to, references
@@ -1175,11 +1226,11 @@ class ClassicEmailHandler(EmailHandler):
         return await self.incoming_client.delete_emails(email_ids, mailbox)
 
     async def download_attachment(
-        self,
-        email_id: str,
-        attachment_name: str,
-        save_path: str,
-        mailbox: str = "INBOX",
+            self,
+            email_id: str,
+            attachment_name: str,
+            save_path: str,
+            mailbox: str = "INBOX",
     ) -> AttachmentDownloadResponse:
         """Download an email attachment and save it to the specified path.
 
@@ -1200,3 +1251,138 @@ class ClassicEmailHandler(EmailHandler):
             size=result["size"],
             saved_path=result["saved_path"],
         )
+
+    async def cache_emails(self) -> UtilResponse:
+        def chunk_list(lst, chunk_size):
+            return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
+
+        try:
+            # 获取所有邮件 UID
+            uids = await self.get_emails_uid()
+            all_uid_list = uids.email_uid_list
+
+            # 检查已有缓存文件，提取已缓存的 UID 集合
+            cache_file = 'emails.json'
+            existing_uids = set()
+            if os.path.exists(cache_file):
+                try:
+                    async with aiofiles.open(cache_file, 'r', encoding='utf-8') as f:
+                        content = await f.read()
+                        if content.strip():
+                            existing_data = json.loads(content)
+                            # JSON 的键是字符串形式的 UID
+                            existing_uids = set(existing_data.keys())
+                except (json.JSONDecodeError, IOError) as e:
+                    logger.warning(f"Failed to read existing cache file: {e}, will re-cache all emails.")
+                    existing_uids = set()  # 读取失败则全量缓存
+
+            # 过滤出未缓存的 UID
+            new_uid_list = [uid for uid in all_uid_list if str(uid) not in existing_uids]
+            if not new_uid_list:
+                logger.info("All emails are already cached.")
+                return UtilResponse(message="所有邮件均已缓存", success=True)
+
+            # 分块处理未缓存的 UID
+            email_ids_chunks = chunk_list(new_uid_list, 1000)
+            total_chunks = len(email_ids_chunks)
+            for index, email_ids_chunk in enumerate(email_ids_chunks):
+                logger.info(f"Processing chunk {index + 1}/{total_chunks} ({len(email_ids_chunk)} emails)")
+                try:
+                    # 获取该批次的邮件内容
+                    emails_response = await self.get_emails_content(email_ids=email_ids_chunk)
+                    if emails_response is None or not hasattr(emails_response, 'emails'):
+                        logger.warning(f"Chunk {index + 1} returned invalid response, all emails in this chunk failed")
+                        # 记录整批失败
+                        await self._record_failed_uids(email_ids_chunk, "get_emails_content returned None/invalid")
+                        continue
+
+                    email_list = emails_response.emails
+                    if not email_list:
+                        logger.info(f"Chunk {index + 1} has no email data, all emails failed")
+                        await self._record_failed_uids(email_ids_chunk, "no email data in response")
+                        continue
+
+                    # 成功获取的 UID（从邮件对象中提取）
+                    success_uids = set()
+                    for email_obj in email_list:
+                        if hasattr(email_obj, 'email_id'):
+                            success_uids.add(str(email_obj.email_id))
+                        elif isinstance(email_obj, dict) and 'email_id' in email_obj:
+                            success_uids.add(str(email_obj['email_id']))
+
+                    # 计算失败的 UID
+                    failed_uids = [str(uid) for uid in email_ids_chunk if str(uid) not in success_uids]
+
+                    # 保存成功的邮件
+                    if email_list:
+                        await self._save_emails_chunk(email_list)
+
+                    # 记录失败的 UID
+                    if failed_uids:
+                        await self._record_failed_uids(failed_uids, "email content missing in response")
+
+                except Exception as chunk_error:
+                    logger.error(f"Failed to process chunk {index + 1}: {chunk_error}", exc_info=True)
+                    # 整批记录失败
+                    await self._record_failed_uids(email_ids_chunk, f"exception: {str(chunk_error)}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Failed to cache emails: {e}", exc_info=True)
+            return UtilResponse(
+                message=f"缓存失败，错误信息为：{str(e)}",
+                success=False
+            )
+
+        return UtilResponse(
+            message="缓存成功",
+            success=True
+        )
+
+    @staticmethod
+    async def _save_emails_chunk(emails_chunk, filename='emails.json'):
+        """
+        将一批邮件保存到 JSON 文件，保证 uid 不重复。
+        :param emails_chunk: list[dict] 每个字典至少包含 'uid' 键
+        :param filename: 保存的文件名
+        """
+
+        class DateTimeEncoder(json.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                if isinstance(obj, date):
+                    return obj.isoformat()
+                return super().default(obj)
+
+        # 读取已有数据
+        existing_data = {}
+        if os.path.exists(filename):
+            async with aiofiles.open(filename, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                if content.strip():
+                    try:
+                        existing_data = json.loads(content)
+                    except json.JSONDecodeError:
+                        existing_data = {}
+
+        # 合并新数据，只添加 uid 不存在的邮件
+        for _email in emails_chunk:
+            if hasattr(_email, 'model_dump'):  # Pydantic v2
+                email_dict = _email.model_dump()
+            elif hasattr(_email, 'dict'):  # Pydantic v1
+                email_dict = _email.dict()
+            else:
+                # 如果是普通字典，直接使用
+                email_dict = _email if isinstance(_email, dict) else vars(_email)
+
+            uid = email_dict.get("email_id")
+            if uid and uid not in existing_data:
+                existing_data[uid] = email_dict
+
+        # 写回文件
+        async with aiofiles.open(filename, 'w', encoding='utf-8') as f:
+            await f.write(json.dumps(existing_data, ensure_ascii=False, indent=2, cls=DateTimeEncoder))
+
+
+

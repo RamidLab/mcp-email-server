@@ -71,3 +71,8 @@ class EmailCountResponse(BaseModel):
 class EmailUIDResponse(BaseModel):
     """Email count response"""
     email_uid_list: list[str]
+
+class UtilResponse(BaseModel):
+    """Util response"""
+    message: str
+    success: bool

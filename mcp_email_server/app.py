@@ -17,6 +17,7 @@ from mcp_email_server.emails.models import (
     EmailMetadataPageResponse,
     EmailCountResponse,
     EmailUIDResponse,
+    UtilResponse,
 )
 
 mcp = FastMCP("email")
@@ -181,6 +182,14 @@ async def get_emails_content(
     handler = dispatch_handler(account_name)
     return await handler.get_emails_content(email_ids, mailbox)
 
+@mcp.tool(
+    description="Cache all emails in the specified account."
+)
+async def cache_emails(
+        account_name: Annotated[str, Field(description="The name of the email account.")]
+) -> UtilResponse:
+    handler = dispatch_handler(account_name)
+    return await handler.cache_emails()
 
 @mcp.tool(
     description="Send an email using the specified account. Supports replying to emails with proper threading when in_reply_to is provided.",
