@@ -1184,14 +1184,79 @@ class ClassicEmailHandler(EmailHandler):
             total=total,
         )
 
-    async def get_emails_content(self, email_ids: list[str], mailbox: str = "INBOX") -> EmailContentBatchResponse:
-        emails = await self.incoming_client.get_emails_body_by_id(email_ids, mailbox)
+    async def get_emails_content(
+            self,
+            email_ids: list[str],
+            mailbox: str = "INBOX",
+            use_cache: bool = True,
+            update_cache: bool = True,
+            cache_file: str = 'emails.json'
+    ) -> EmailContentBatchResponse:
+        emails_list = []
+        failed_ids = []
+        missing_ids = []
+
+        # 如果启用缓存，读取本地缓存文件
+        if use_cache:
+            existing_cache = {}
+            if os.path.exists(cache_file):
+                try:
+                    async with aiofiles.open(cache_file, 'r', encoding='utf-8') as f:
+                        content = await f.read()
+                        if content.strip():
+                            existing_cache = json.loads(content)
+                except (json.JSONDecodeError, IOError) as e:
+                    logger.warning(f"Failed to read cache file {cache_file}: {e}, ignoring cache for this request.")
+                    existing_cache = {}
+
+            # 分类：已缓存的直接恢复对象，缺失的标记
+            for uid in email_ids:
+                if uid in existing_cache:
+                    try:
+                        # 将缓存的字典还原为 EmailBodyResponse 对象
+                        email_obj = EmailBodyResponse.model_validate(existing_cache[uid])
+                        emails_list.append(email_obj)
+                    except Exception as e:
+                        logger.error(f"Failed to parse cached email {uid}: {e}, will fetch again")
+                        missing_ids.append(uid)
+                else:
+                    missing_ids.append(uid)
+        else:
+            missing_ids = email_ids[:]
+
+        # 处理缺失的 UID：从 IMAP 服务器获取
+        new_emails = []
+        if missing_ids:
+            try:
+                result = await self.incoming_client.get_emails_body_by_id(missing_ids, mailbox)
+                # 预期 result 结构：{'emails_content': [...], 'failed_ids': [...]}
+                emails_content = result.get('emails_content', [])
+                fetched_failed = result.get('failed_ids', [])
+
+                # 成功获取的邮件
+                for email_obj in emails_content:
+                    emails_list.append(email_obj)
+                    new_emails.append(email_obj)
+
+                failed_ids.extend([str(uid) for uid in fetched_failed])  # 记录获取失败的 UID
+
+            except Exception as e:
+                logger.error(f"Failed to fetch emails from IMAP: {e}")
+                # 整个缺失列表标记为失败
+                failed_ids.extend([str(uid) for uid in missing_ids])
+
+        # 如果启用了缓存更新且成功获取了新邮件，写入缓存
+        if update_cache and new_emails:
+            try:
+                await self._save_emails_chunk(new_emails, filename=cache_file)
+            except Exception as e:
+                logger.error(f"Failed to update cache with new emails: {e}")
 
         return EmailContentBatchResponse(
-            emails=emails["emails_content"],
+            emails=emails_list,
             requested_count=len(email_ids),
-            retrieved_count=len(emails["emails_content"]),
-            failed_ids=emails["failed_ids"],
+            retrieved_count=len(emails_list),
+            failed_ids=failed_ids
         )
 
     async def send_email(
