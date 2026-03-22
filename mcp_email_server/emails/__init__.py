@@ -105,7 +105,14 @@ class EmailHandler(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def get_emails_content(self, email_ids: list[str], mailbox: str = "INBOX") -> "EmailContentBatchResponse":
+    async def get_emails_content(
+            self,
+            email_ids: list[str],
+            mailbox: str = "INBOX",
+            use_cache: bool = True,
+            update_cache: bool = True,
+            cache_file: str = 'emails.json'
+    ) -> "EmailContentBatchResponse":
         """
         Get full content (including body) of multiple emails by their email IDs (IMAP UIDs)
         """

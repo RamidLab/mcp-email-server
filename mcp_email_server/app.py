@@ -178,9 +178,12 @@ async def get_emails_content(
         ),
     ],
     mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to retrieve emails from.")] = "INBOX",
+    use_cache: Annotated[bool, Field(default=True, description="Whether to use local cache.")] = True,
+    update_cache: Annotated[bool, Field(default=True, description="Whether to update local cache.")] = True,
+    cache_file: Annotated[str, Field(default='emails.json', description="Path to the local cache file.")] = 'emails.json',
 ) -> EmailContentBatchResponse:
     handler = dispatch_handler(account_name)
-    return await handler.get_emails_content(email_ids, mailbox)
+    return await handler.get_emails_content(email_ids, mailbox, use_cache, update_cache, cache_file)
 
 @mcp.tool(
     description="Cache all emails in the specified account."
