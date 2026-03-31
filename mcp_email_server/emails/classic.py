@@ -10,6 +10,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone, date
 from email.header import Header
+from email.header import decode_header
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -149,6 +150,116 @@ class EmailClient:
         except Exception:
             return datetime.now(timezone.utc)
 
+    @staticmethod
+    def check_field(infos, _default="null", charset=None) -> str | None | Any:
+        """
+        邮件头字段解码工具（优化版）
+        兼容RFC2047编码，自动处理多编码、unknown-8bit，支持自定义字符集
+        原有功能100%保留，代码精简、健壮性提升
+        """
+        if not infos:
+            return _default
+
+        # 统一解码所有分段（无需区分长度1/大于1，消除冗余）
+        decoded_parts = decode_header(infos)
+        result = []
+
+        def _decode_bytes(_data: bytes, _code: str | None) -> str:
+            """内部辅助：单段字节解码，统一编码优先级逻辑"""
+            # 编码优先级：指定charset > 头部声明编码 > gb18030 > utf-8兜底
+            priority_encodings = []
+            if charset:
+                priority_encodings.append(charset)
+            if _code and _code != "unknown-8bit":
+                priority_encodings.append(_code)
+            priority_encodings.extend(["gb18030", "utf-8"])
+
+            # 遍历编码尝试解码，失败则替换异常字符
+            for enc in priority_encodings:
+                try:
+                    return _data.decode(enc.strip())
+                except (UnicodeDecodeError, LookupError):
+                    continue
+            # 终极兜底
+            return _data.decode("utf-8", errors="replace")
+
+        # 遍历所有编码段，统一处理
+        for data, code in decoded_parts:
+            if isinstance(data, bytes):
+                result.append(_decode_bytes(data, code))
+            else:
+                result.append(str(data))
+
+        # 拼接结果，空值返回默认
+        final_str = ''.join(result).strip()
+        return final_str if final_str else _default
+
+    @staticmethod
+    def clean_filename(filename):
+        """清理文件名中的无效字符"""
+        # 移除换行符和回车符
+        cleaned = re.sub(r'[\r\n]', '', filename)
+        # 移除其他可能的问题字符
+        cleaned = re.sub(r'[\\/:*?"<>|]', '_', cleaned)
+        # 移除首尾空格
+        return cleaned.strip()
+
+    def decode_filename(self, part) -> str | None:
+        content_type = part.get_content_type()
+        appendix_name = part.get_filename()
+        content_disposition = str(part.get("Content-Disposition", "")).lower()
+
+        # 更精确的附件检测条件
+        is_attachment = False
+
+        # 情况1：有明确文件名
+        if appendix_name:
+            is_attachment = True
+
+        # 情况2：没有文件名但有附件标记
+        elif "attachment" in content_disposition:
+            is_attachment = True
+
+        # 情况3：没有文件名但有非文本内容类型
+        elif (content_type not in ["text/plain", "text/html", "image/jpeg", "image/png", "image/gif"]
+              and not content_type.startswith("multipart/")):
+            is_attachment = True
+
+        if is_attachment:
+            appendix_info = None
+
+            # 处理附件名称
+            if appendix_name:
+                try:
+                    # 解码可能编码的文件名
+                    decoded_name = decode_header(appendix_name)
+                    if decoded_name:
+                        filename_parts = []
+                        for part_data, part_charset in decoded_name:
+                            if isinstance(part_data, bytes):
+                                # 尝试常见编码
+                                for encoding in ['utf-8', 'gbk', 'gb2312', 'iso-8859-1']:
+                                    try:
+                                        filename_parts.append(part_data.decode(encoding))
+                                        break
+                                    except UnicodeDecodeError:
+                                        continue
+                            else:
+                                filename_parts.append(part_data)
+
+                        appendix_info = ''.join(filename_parts)
+                except Exception as e:
+                    print(f"文件名解码错误: {e}")
+            else:
+                # 生成默认文件名
+                ext = content_type.split('/')[-1] if '/' in content_type else 'bin'
+                appendix_info = f"attachment.{ext}"
+
+            appendix_info = self.clean_filename(appendix_info)
+
+            return appendix_info
+        return None
+
     def _parse_email_data(
             self,
             raw_email: bytes,
@@ -157,12 +268,13 @@ class EmailClient:
             attachment_cache_dir: str | None = "attachments",
     ) -> dict[str, Any]:  # noqa: C901
         """Parse raw email data into a structured dictionary."""
-        parser = BytesParser(policy=default)
-        email_message = parser.parsebytes(raw_email)
+        email_parser = email.parser.BytesFeedParser()
+        email_parser.feed(raw_email)
+        email_message = email_parser.close()
 
         # Extract email parts
-        subject = email_message.get("Subject", "")
-        sender = email_message.get("From", "")
+        subject = self.check_field(email_message.get("Subject", ""))
+        sender = self.check_field(email_message.get("From", ""))
         date_str = email_message.get("Date", "")
 
         # Extract Message-ID for reply threading
@@ -203,7 +315,7 @@ class EmailClient:
 
                 # Handle attachments
                 if "attachment" in content_disposition:
-                    filename = part.get_filename()
+                    filename = self.decode_filename(part)
                     if filename:
                         if cache_attachments:
                             attachment_data = part.get_payload(decode=True)
