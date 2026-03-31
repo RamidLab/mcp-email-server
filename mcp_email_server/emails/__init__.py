@@ -118,7 +118,11 @@ class EmailHandler(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def cache_emails(self) -> "UtilResponse":
+    async def cache_emails(
+            self, mailbox: str = "INBOX",
+            cache_attachments: bool = True,
+            attachment_cache_dir: str = "attachments"
+    ) -> "UtilResponse":
         """
         Cache all emails in the specified account.
         """

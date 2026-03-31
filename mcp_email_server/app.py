@@ -189,10 +189,13 @@ async def get_emails_content(
     description="Cache all emails in the specified account."
 )
 async def cache_emails(
-        account_name: Annotated[str, Field(description="The name of the email account.")]
+        account_name: Annotated[str, Field(description="The name of the email account.")],
+        mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to cache emails from.")] = "INBOX",
+        cache_attachments: Annotated[bool, Field(default=True, description="Whether to cache attachments.")] = True,
+        attachment_cache_dir: Annotated[str | None, Field(default="attachments", description="Path to the local cache directory for attachments.")] = "attachments",
 ) -> UtilResponse:
     handler = dispatch_handler(account_name)
-    return await handler.cache_emails()
+    return await handler.cache_emails(mailbox, cache_attachments, attachment_cache_dir)
 
 @mcp.tool(
     description="Send an email using the specified account. Supports replying to emails with proper threading when in_reply_to is provided.",

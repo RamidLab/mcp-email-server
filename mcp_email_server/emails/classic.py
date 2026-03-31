@@ -148,7 +148,13 @@ class EmailClient:
         except Exception:
             return datetime.now(timezone.utc)
 
-    def _parse_email_data(self, raw_email: bytes, email_id: str | None = None) -> dict[str, Any]:  # noqa: C901
+    def _parse_email_data(
+            self,
+            raw_email: bytes,
+            email_id: str | None = None,
+            cache_attachments: bool = False,
+            attachment_cache_dir: str | None = "attachments",
+    ) -> dict[str, Any]:  # noqa: C901
         """Parse raw email data into a structured dictionary."""
         parser = BytesParser(policy=default)
         email_message = parser.parsebytes(raw_email)
@@ -198,6 +204,12 @@ class EmailClient:
                 if "attachment" in content_disposition:
                     filename = part.get_filename()
                     if filename:
+                        if cache_attachments:
+                            attachment_data = part.get_payload(decode=True)
+                            cache_dir = Path(attachment_cache_dir) / email_id
+                            cache_file = cache_dir / filename
+                            cache_file.parent.mkdir(parents=True, exist_ok=True)
+                            cache_file.write_bytes(attachment_data)
                         attachments.append(filename)
                 # Handle text parts - prefer text/plain
                 elif content_type == "text/plain":
@@ -593,7 +605,13 @@ class EmailClient:
 
         return None
 
-    async def get_emails_body_by_id(self, email_ids: list[str], mailbox: str = "INBOX") -> dict[str, Any] | None:
+    async def get_emails_body_by_id(
+            self,
+            email_ids: list[str],
+            mailbox: str = "INBOX",
+            cache_attachments: bool = False,
+            attachment_cache_dir: str | None = "attachments",
+    ) -> dict[str, Any] | None:
         imap = self._imap_connect()
         try:
             # Wait for the connection to be established
@@ -623,7 +641,7 @@ class EmailClient:
 
                 # Parse the email
                 try:
-                    email_data = self._parse_email_data(raw_email, email_id)
+                    email_data = self._parse_email_data(raw_email, email_id, cache_attachments, attachment_cache_dir)
 
                     emails_content.append(
                         EmailBodyResponse(
@@ -1190,7 +1208,9 @@ class ClassicEmailHandler(EmailHandler):
             mailbox: str = "INBOX",
             use_cache: bool = True,
             update_cache: bool = True,
-            cache_file: str = 'emails.json'
+            cache_file: str = 'emails.json',
+            cache_attachments: bool = False,
+            attachment_cache_dir: str | None = "attachments",
     ) -> EmailContentBatchResponse:
         emails_list = []
         failed_ids = []
@@ -1228,7 +1248,7 @@ class ClassicEmailHandler(EmailHandler):
         new_emails = []
         if missing_ids:
             try:
-                result = await self.incoming_client.get_emails_body_by_id(missing_ids, mailbox)
+                result = await self.incoming_client.get_emails_body_by_id(missing_ids, mailbox, cache_attachments)
                 # 预期 result 结构：{'emails_content': [...], 'failed_ids': [...]}
                 emails_content = result.get('emails_content', [])
                 fetched_failed = result.get('failed_ids', [])
@@ -1317,7 +1337,12 @@ class ClassicEmailHandler(EmailHandler):
             saved_path=result["saved_path"],
         )
 
-    async def cache_emails(self) -> UtilResponse:
+    async def cache_emails(
+            self,
+            mailbox: str = "INBOX",
+            cache_attachments: bool = True,
+            attachment_cache_dir: str | None = "attachments",
+    ) -> UtilResponse:
         def chunk_list(lst, chunk_size):
             return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
 
@@ -1354,7 +1379,12 @@ class ClassicEmailHandler(EmailHandler):
                 logger.info(f"Processing chunk {index + 1}/{total_chunks} ({len(email_ids_chunk)} emails)")
                 try:
                     # 获取该批次的邮件内容
-                    emails_response = await self.get_emails_content(email_ids=email_ids_chunk)
+                    emails_response = await self.get_emails_content(
+                        email_ids=email_ids_chunk,
+                        mailbox=mailbox,
+                        cache_attachments=cache_attachments,
+                        attachment_cache_dir=attachment_cache_dir
+                    )
                     if emails_response is None or not hasattr(emails_response, 'emails'):
                         logger.warning(f"Chunk {index + 1} returned invalid response, all emails in this chunk failed")
                         # 记录整批失败
