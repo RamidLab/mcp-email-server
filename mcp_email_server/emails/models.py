@@ -14,6 +14,7 @@ class EmailMetadata(BaseModel):
     recipients: list[str]  # Recipient list
     date: datetime
     attachments: list[str]
+    cache_attachments: bool
 
     @classmethod
     def from_email(cls, email: dict[str, Any]):
@@ -25,6 +26,7 @@ class EmailMetadata(BaseModel):
             recipients=email.get("to", []),
             date=email["date"],
             attachments=email["attachments"],
+            cache_attachments=email["cache_attachments"],
         )
 
 

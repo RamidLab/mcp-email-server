@@ -370,6 +370,7 @@ class EmailClient:
             "body": body,
             "date": date,
             "attachments": attachments,
+            "cache_attachments": True if attachments is not None and cache_attachments else False,
         }
 
     @staticmethod
@@ -766,6 +767,7 @@ class EmailClient:
                             date=email_data["date"],
                             body=email_data["body"],
                             attachments=email_data["attachments"],
+                            cache_attachments=email_data["cache_attachments"]
                         )
                     )
                 except Exception as e:
