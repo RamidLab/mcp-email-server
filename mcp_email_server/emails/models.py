@@ -76,3 +76,4 @@ class UtilResponse(BaseModel):
     """Util response"""
     message: str
     success: bool
+    data: dict[str, Any] | None

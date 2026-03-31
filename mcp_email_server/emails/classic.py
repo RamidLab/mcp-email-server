@@ -6,6 +6,7 @@ import os
 import re
 import ssl
 import time
+import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone, date
 from email.header import Header
@@ -15,7 +16,7 @@ from email.mime.text import MIMEText
 from email.parser import BytesParser
 from email.policy import default
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict
 
 import aiofiles
 import aioimaplib
@@ -1032,6 +1033,8 @@ class EmailClient:
 
 
 class ClassicEmailHandler(EmailHandler):
+    _cache_tasks: Dict[str, Dict[str, Any]] = {}
+
     def __init__(self, email_settings: EmailSettings):
         self.email_settings = email_settings
         self.incoming_client = EmailClient(email_settings.incoming)
@@ -1041,6 +1044,10 @@ class ClassicEmailHandler(EmailHandler):
         )
         self.save_to_sent = email_settings.save_to_sent
         self.sent_folder_name = email_settings.sent_folder_name
+
+    @staticmethod
+    def _generate_task_id() -> str:
+        return str(uuid.uuid4())
 
     @staticmethod
     async def _record_failed_uids(uids, reason="", filename='failed_emails.json'):
@@ -1343,15 +1350,41 @@ class ClassicEmailHandler(EmailHandler):
             cache_attachments: bool = True,
             attachment_cache_dir: str | None = "attachments",
     ) -> UtilResponse:
-        def chunk_list(lst, chunk_size):
-            return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
+        """启动后台缓存任务，立即返回任务 ID"""
+        task_id = self._generate_task_id()
+        # 初始化任务状态
+        self._cache_tasks[task_id] = {
+            "status": "pending",  # pending, running, completed, failed
+            "total": 0,
+            "processed": 0,
+            "message": "Task created",
+            "error": None
+        }
+        # 启动后台任务
+        asyncio.create_task(self._run_cache_task(
+            task_id, mailbox, cache_attachments, attachment_cache_dir
+        ))
+        return UtilResponse(
+            message=f"Cache task started with ID: {task_id}",
+            success=True,
+            data={"task_id": task_id}
+        )
 
+    async def _run_cache_task(
+            self,
+            task_id: str,
+            mailbox: str,
+            cache_attachments: bool,
+            attachment_cache_dir: str | None
+    ) -> None:
+        """后台执行真正的缓存逻辑，并更新任务状态"""
         try:
             # 获取所有邮件 UID
             uids = await self.get_emails_uid()
             all_uid_list = uids.email_uid_list
+            total_all = len(all_uid_list)
 
-            # 检查已有缓存文件，提取已缓存的 UID 集合
+            # 检查已有缓存，过滤出未缓存的 UID
             cache_file = 'emails.json'
             existing_uids = set()
             if os.path.exists(cache_file):
@@ -1360,23 +1393,42 @@ class ClassicEmailHandler(EmailHandler):
                         content = await f.read()
                         if content.strip():
                             existing_data = json.loads(content)
-                            # JSON 的键是字符串形式的 UID
                             existing_uids = set(existing_data.keys())
                 except (json.JSONDecodeError, IOError) as e:
-                    logger.warning(f"Failed to read existing cache file: {e}, will re-cache all emails.")
-                    existing_uids = set()  # 读取失败则全量缓存
+                    logger.warning(f"Failed to read cache file: {e}")
 
-            # 过滤出未缓存的 UID
             new_uid_list = [uid for uid in all_uid_list if str(uid) not in existing_uids]
-            if not new_uid_list:
-                logger.info("All emails are already cached.")
-                return UtilResponse(message="所有邮件均已缓存", success=True)
+            total_new = len(new_uid_list)
 
-            # 分块处理未缓存的 UID
+            # 更新任务状态：开始运行
+            self._cache_tasks[task_id].update({
+                "status": "running",
+                "total": total_new,
+                "processed": 0,
+                "message": f"找到 {total_new} 个未缓存邮件，共 {total_all} 个"
+            })
+
+            if not new_uid_list:
+                self._cache_tasks[task_id].update({
+                    "status": "completed",
+                    "message": "邮件缓存无更新",
+                    "processed": total_new
+                })
+                return
+
+            # 分块处理
+            def chunk_list(lst, chunk_size):
+                return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
+
             email_ids_chunks = chunk_list(new_uid_list, 1000)
             total_chunks = len(email_ids_chunks)
+            processed_count = 0
+
             for index, email_ids_chunk in enumerate(email_ids_chunks):
-                logger.info(f"Processing chunk {index + 1}/{total_chunks} ({len(email_ids_chunk)} emails)")
+                # 更新进度
+                self._cache_tasks[task_id]["processed"] = processed_count
+                self._cache_tasks[task_id]["message"] = f"Processing chunk {index + 1}/{total_chunks}"
+
                 try:
                     # 获取该批次的邮件内容
                     emails_response = await self.get_emails_content(
@@ -1416,23 +1468,33 @@ class ClassicEmailHandler(EmailHandler):
                     if failed_uids:
                         await self._record_failed_uids(failed_uids, "email content missing in response")
 
+                    # 更新已处理数量（该分块中的邮件数量，无论成功或失败）
+                    processed_count += len(email_ids_chunk)
+                    self._cache_tasks[task_id]["processed"] = processed_count
+
                 except Exception as chunk_error:
-                    logger.error(f"Failed to process chunk {index + 1}: {chunk_error}", exc_info=True)
-                    # 整批记录失败
-                    await self._record_failed_uids(email_ids_chunk, f"exception: {str(chunk_error)}")
+                    logger.error(f"Chunk {index + 1} failed: {chunk_error}")
+                    # 即使出错也计入已处理数量（失败也算处理过）
+                    processed_count += len(email_ids_chunk)
+                    self._cache_tasks[task_id]["processed"] = processed_count
+                    # 记录失败 UID（原有 _record_failed_uids 可以复用）
+                    await self._record_failed_uids(email_ids_chunk, f"chunk error: {chunk_error}")
                     continue
 
-        except Exception as e:
-            logger.error(f"Failed to cache emails: {e}", exc_info=True)
-            return UtilResponse(
-                message=f"缓存失败，错误信息为：{str(e)}",
-                success=False
-            )
+            # 所有分块处理完毕
+            self._cache_tasks[task_id].update({
+                "status": "completed",
+                "message": "邮件缓存工作完成",
+                "processed": processed_count
+            })
 
-        return UtilResponse(
-            message="缓存成功",
-            success=True
-        )
+        except Exception as e:
+            logger.error(f"Cache task failed: {e}", exc_info=True)
+            self._cache_tasks[task_id].update({
+                "status": "failed",
+                "message": f"Task failed: {str(e)}",
+                "error": str(e)
+            })
 
     @staticmethod
     async def _save_emails_chunk(emails_chunk, filename='emails.json'):
@@ -1479,5 +1541,24 @@ class ClassicEmailHandler(EmailHandler):
         async with aiofiles.open(filename, 'w', encoding='utf-8') as f:
             await f.write(json.dumps(existing_data, ensure_ascii=False, indent=2, cls=DateTimeEncoder))
 
+    async def get_cache_status(self, task_id: str) -> UtilResponse:
+        """查询缓存任务的执行状态"""
+        task_info = self._cache_tasks.get(task_id)
+        if not task_info:
+            return UtilResponse(
+                message=f"Task {task_id} not found",
+                success=False,
+                data=None
+            )
 
-
+        return UtilResponse(
+            message=task_info.get("message", ""),
+            success=task_info["status"] == "completed",
+            data={
+                "task_id": task_id,
+                "status": task_info["status"],
+                "total": task_info.get("total", 0),
+                "processed": task_info.get("processed", 0),
+                "error": task_info.get("error")
+            }
+        )

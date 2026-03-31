@@ -181,3 +181,15 @@ class EmailHandler(abc.ABC):
         Returns:
             AttachmentDownloadResponse with download result information.
         """
+
+    @abc.abstractmethod
+    async def get_cache_status(self, task_id: str) -> "UtilResponse":
+        """
+        Get the status of a cache operation.
+
+        Args:
+            task_id: The task ID of the cache operation.
+
+        Returns:
+            UtilResponse with cache status information.
+        """

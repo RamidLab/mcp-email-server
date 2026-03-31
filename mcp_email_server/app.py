@@ -299,3 +299,13 @@ async def download_attachment(
 
     handler = dispatch_handler(account_name)
     return await handler.download_attachment(email_id, attachment_name, save_path, mailbox)
+
+@mcp.tool(
+    description="Get the status of a cache operation."
+)
+async def get_cache_status(
+        account_name: Annotated[str, Field(description="The name of the email account.")],
+        task_id: Annotated[str, Field(description="The task ID of the cache operation.")],
+   ):
+    handler = dispatch_handler(account_name)
+    return await handler.get_cache_status(task_id)
