@@ -193,3 +193,9 @@ class EmailHandler(abc.ABC):
         Returns:
             UtilResponse with cache status information.
         """
+
+    @abc.abstractmethod
+    async def get_attachment_by_base64(self, email_id: str) -> "UtilResponse":
+        """
+        根据邮件 ID 获取附件的 base64 编码
+        """

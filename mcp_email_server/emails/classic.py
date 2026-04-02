@@ -18,7 +18,7 @@ from email.parser import BytesParser
 from email.policy import default
 from pathlib import Path
 from typing import Any, Dict
-
+import base64
 import aiofiles
 import aioimaplib
 import aiosmtplib
@@ -1676,3 +1676,46 @@ class ClassicEmailHandler(EmailHandler):
                 "error": task_info.get("error")
             }
         )
+
+    @staticmethod
+    async def get_file_base64(file_path: str):
+        with open(file_path, 'rb') as f:
+            attachment = f.read()
+            return base64.b64encode(attachment).decode('utf-8')
+
+
+    async def get_attachment_by_base64(self, email_id: str) -> UtilResponse:
+        """根据邮件 ID 获取附件的 base64 编码"""
+        existing_cache = {}
+        # TODO: 后续区分邮箱用户文件夹
+        file_path = f"attachments/{email_id}"
+        if os.path.exists(file_path):
+            file_list=os.listdir(file_path)
+            if file_list:
+                for file in file_list:
+                    try:
+                        existing_cache[file] = await self.get_file_base64(os.path.join(file_path, file))
+                    except Exception as e:
+                        logger.error(f"Error reading attachment {file}: {e}", exc_info=True)
+                        return UtilResponse(
+                            message=f"Error reading attachment {file}: {e}",
+                            success=False,
+                            data=None
+                        )
+                return UtilResponse(
+                    message=f"Attachments {email_id} read successfully",
+                    success=True,
+                    data=existing_cache
+                )
+            else:
+                return UtilResponse(
+                    message=f"Attachments {email_id} not found",
+                    success=False,
+                    data=None
+                )
+        else:
+            return UtilResponse(
+                message=f"Attachment {email_id} not found",
+                success=False,
+                data=None
+            )

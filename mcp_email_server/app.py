@@ -309,3 +309,13 @@ async def get_cache_status(
    ):
     handler = dispatch_handler(account_name)
     return await handler.get_cache_status(task_id)
+
+@mcp.tool(
+    description="Download an email attachment and save it to the specified path."
+)
+async def get_attachment_by_base64(
+    account_name: Annotated[str, Field(description="The name of the email account.")],
+    email_id: Annotated[str, Field(description="The email ID (obtained from list_emails_metadata or get_emails_content).")],
+) -> UtilResponse:
+    handler = dispatch_handler(account_name)
+    return await handler.get_attachment_by_base64(email_id)
