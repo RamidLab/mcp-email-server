@@ -118,6 +118,19 @@ class EmailHandler(abc.ABC):
         """
 
     @abc.abstractmethod
+    async def get_email_content(
+            self,
+            email_id: str,
+            mailbox: str = "INBOX",
+            use_cache: bool = True,
+            update_cache: bool = True,
+            cache_file: str = 'emails.json'
+    ) -> "UtilResponse":
+        """
+        Get full content (including body) of a single email by its email ID (IMAP UID)
+        """
+
+    @abc.abstractmethod
     async def cache_emails(
             self, mailbox: str = "INBOX",
             cache_attachments: bool = True,

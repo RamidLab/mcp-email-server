@@ -719,6 +719,73 @@ class EmailClient:
 
         return None
 
+    async def get_email_body_by_id(
+            self,
+            email_id: str,
+            mailbox: str = "INBOX",
+            cache_attachments: bool = False,
+            attachment_cache_dir: str | None = "attachments",
+    ) -> dict[str, Any] | None:
+        imap = self._imap_connect()
+        try:
+            # Wait for the connection to be established
+            await imap._client_task
+            await imap.wait_hello_from_server()
+
+            # Login and select inbox
+            await imap.login(self.email_server.user_name, self.email_server.password)
+            await _send_imap_id(imap)
+            await imap.select(_quote_mailbox(mailbox))
+
+            # Fetch the specific email by UID
+            data = await self._fetch_email_with_formats(imap, email_id)
+            if not data:
+                logger.error(f"Failed to fetch UID {email_id} with any format")
+                return {
+                    "status": "error",
+                    "message": f"Failed to fetch UID {email_id} with any format",
+                }
+
+            # Extract raw email data
+            raw_email = self._extract_raw_email(data)
+            if not raw_email:
+                logger.error(f"Could not find email data in response for email ID: {email_id}")
+                return {
+                    "status": "error",
+                    "message": f"Could not find email data in response for email ID: {email_id}",
+                }
+            # Parse the email
+            try:
+                email_data = self._parse_email_data(raw_email, email_id, cache_attachments, attachment_cache_dir)
+            except Exception as e:
+                logger.error(f"Error parsing email: {e!s}")
+                return {
+                    "status": "error",
+                    "message": f"Error parsing email ID: {email_id}, error: {e!s}",
+                }
+
+            return {
+                "status": "success",
+                "email_content": EmailBodyResponse(
+                        email_id=email_data["email_id"],
+                        message_id=email_data.get("message_id"),
+                        subject=email_data["subject"],
+                        sender=email_data["from"],
+                        recipients=email_data["to"],
+                        date=email_data["date"],
+                        body=email_data["body"],
+                        attachments=email_data["attachments"],
+                        cache_attachments=email_data["cache_attachments"]
+                    ),
+            }
+
+        finally:
+            # Ensure we logout properly
+            try:
+                await imap.logout()
+            except Exception as e:
+                logger.info(f"Error during logout: {e}")
+
     async def get_emails_body_by_id(
             self,
             email_ids: list[str],
@@ -1321,6 +1388,74 @@ class ClassicEmailHandler(EmailHandler):
             subject=subject,
             emails=emails,
             total=total,
+        )
+
+    async def get_email_content(
+            self,
+            email_id: str,
+            mailbox: str = "INBOX",
+            use_cache: bool = True,
+            update_cache: bool = True,
+            cache_file: str = 'emails.json',
+            cache_attachments: bool = False,
+            attachment_cache_dir: str | None = "attachments",
+    ) -> UtilResponse:
+        new_email = False
+        # 如果启用缓存，读取本地缓存文件
+        if use_cache:
+            existing_cache = {}
+            if os.path.exists(cache_file):
+                try:
+                    async with aiofiles.open(cache_file, 'r', encoding='utf-8') as f:
+                        content = await f.read()
+                        if content.strip():
+                            existing_cache = json.loads(content)
+                except (json.JSONDecodeError, IOError) as e:
+                    logger.warning(f"Failed to read cache file {cache_file}: {e}, ignoring cache for this request.")
+                    existing_cache = {}
+
+            # 分类：已缓存的直接恢复对象，缺失的标记
+
+            if email_id in existing_cache:
+                try:
+                    return UtilResponse(
+                        success=True,
+                        data=existing_cache[email_id],
+                        message=f"{email_id} 缓存查询成功"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to parse cached email {email_id}: {e}, will fetch again")
+
+        # 处理缺失的 UID：从 IMAP 服务器获取
+        try:
+            result = await self.incoming_client.get_email_body_by_id(email_id, mailbox, cache_attachments)
+            # 预期 result 结构：{'emails_content': [...], 'failed_ids': [...]}
+            if result.get("status") == "success":
+                email_content = result.get('email_content', None)
+            else:
+                return UtilResponse(
+                    success=False,
+                    message=result.get("message", "Unknown error"),
+                    data=None,
+                )
+        except Exception as e:
+            logger.error(f"Failed to fetch emails from IMAP: {e}")
+            return UtilResponse(
+                success=False,
+                message=f"Failed to fetch emails from IMAP: {e}",
+                data=None,
+            )
+            # 如果启用了缓存更新且成功获取了新邮件，写入缓存
+        if update_cache:
+            try:
+                await self._save_emails_chunk({email_id: email_content}, filename=cache_file)
+            except Exception as e:
+                logger.error(f"Failed to update cache with new emails: {e}")
+
+        return UtilResponse(
+            success=True,
+            data=email_content,
+            message=f"{email_id} 查询成功{'，更新缓存' if update_cache else '，未更新缓存'}"
         )
 
     async def get_emails_content(

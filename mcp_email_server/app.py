@@ -186,6 +186,26 @@ async def get_emails_content(
     return await handler.get_emails_content(email_ids, mailbox, use_cache, update_cache, cache_file)
 
 @mcp.tool(
+    description="Get the full content (including body) of a single email by its email_id. Use list_emails_metadata first to get the email_id."
+)
+async def get_email_content(
+    account_name: Annotated[str, Field(description="The name of the email account.")],
+    email_id: Annotated[
+        str,
+        Field(
+            description="The email_id to retrieve (obtained from list_emails_metadata). a single email_id."
+        ),
+    ],
+    mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to retrieve emails from.")] = "INBOX",
+    use_cache: Annotated[bool, Field(default=True, description="Whether to use local cache.")] = True,
+    update_cache: Annotated[bool, Field(default=True, description="Whether to update local cache.")] = True,
+    cache_file: Annotated[str, Field(default='emails.json', description="Path to the local cache file.")] = 'emails.json',
+) -> UtilResponse:
+    handler = dispatch_handler(account_name)
+    return await handler.get_email_content(email_id, mailbox, use_cache, update_cache, cache_file)
+
+
+@mcp.tool(
     description="Cache all emails in the specified account."
 )
 async def cache_emails(
