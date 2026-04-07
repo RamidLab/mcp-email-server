@@ -20,46 +20,48 @@ from mcp_email_server.emails.models import (
     UtilResponse,
 )
 
-mcp = FastMCP("email")
+mcp = FastMCP("邮件服务")
 
 
 @mcp.resource("email://{account_name}")
 async def get_account(account_name: str) -> EmailSettings | ProviderSettings | None:
+    """获取指定账户的配置（已脱敏）"""
     settings = get_settings()
     return settings.get_account(account_name, masked=True)
 
 
-@mcp.tool(description="List all configured email accounts with masked credentials.")
+@mcp.tool(description="列出所有已配置的邮件账户（凭证已脱敏）。")
 async def list_available_accounts() -> list[AccountAttributes]:
     settings = get_settings()
     return [account.masked() for account in settings.get_accounts()]
 
 
-@mcp.tool(description="Add a new email account configuration to the settings.")
+@mcp.tool(description="添加一个新的邮件账户配置到设置中。")
 async def add_email_account(email: EmailSettings) -> str:
     settings = get_settings()
     settings.add_email(email)
     settings.store()
-    return f"Successfully added email account '{email.account_name}'"
+    return f"成功添加邮件账户 '{email.account_name}'"
 
-@mcp.tool(description="Get the total count of emails matching specified criteria.")
+
+@mcp.tool(description="获取符合指定条件的邮件总数。")
 async def get_emails_count(
-    account_name: Annotated[str, Field(description="The name of the email account.")],
-    before: Annotated[
-        datetime | None,
-        Field(default=None, description="Count emails before this datetime (UTC)."),
-    ] = None,
-    since: Annotated[
-        datetime | None,
-        Field(default=None, description="Count emails since this datetime (UTC)."),
-    ] = None,
-    subject: Annotated[str | None, Field(default=None, description="Filter emails by subject.")] = None,
-    from_address: Annotated[str | None, Field(default=None, description="Filter emails by sender address.")] = None,
-    to_address: Annotated[str | None, Field(default=None, description="Filter emails by recipient address.")] = None,
-    mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to count emails in.")] = "INBOX",
-    seen: Annotated[bool | None, Field(default=None, description="Filter by read status.")] = None,
-    flagged: Annotated[bool | None, Field(default=None, description="Filter by flagged status.")] = None,
-    answered: Annotated[bool | None, Field(default=None, description="Filter by replied status.")] = None,
+        account_name: Annotated[str, Field(description="邮件账户名称。")],
+        before: Annotated[
+            datetime | None,
+            Field(default=None, description="统计此时间（UTC）之前的邮件。"),
+        ] = None,
+        since: Annotated[
+            datetime | None,
+            Field(default=None, description="统计此时间（UTC）之后的邮件。"),
+        ] = None,
+        subject: Annotated[str | None, Field(default=None, description="按主题筛选邮件。")] = None,
+        from_address: Annotated[str | None, Field(default=None, description="按发件人地址筛选。")] = None,
+        to_address: Annotated[str | None, Field(default=None, description="按收件人地址筛选。")] = None,
+        mailbox: Annotated[str, Field(default="INBOX", description="要统计的邮箱文件夹。")] = "INBOX",
+        seen: Annotated[bool | None, Field(default=None, description="按已读状态筛选。")] = None,
+        flagged: Annotated[bool | None, Field(default=None, description="按已标记状态筛选。")] = None,
+        answered: Annotated[bool | None, Field(default=None, description="按已回复状态筛选。")] = None,
 ) -> EmailCountResponse:
     handler = dispatch_handler(account_name)
     return await handler.get_emails_count(
@@ -74,24 +76,25 @@ async def get_emails_count(
         answered=answered,
     )
 
-@mcp.tool(description="Get the UIDs of emails that match the given filters.")
+
+@mcp.tool(description="获取符合给定过滤条件的邮件 UID 列表。")
 async def get_emails_uid(
-    account_name: Annotated[str, Field(description="The name of the email account.")],
-    before: Annotated[
-        datetime | None,
-        Field(default=None, description="Count emails before this datetime (UTC)."),
-    ] = None,
-    since: Annotated[
-        datetime | None,
-        Field(default=None, description="Count emails since this datetime (UTC)."),
-    ] = None,
-    subject: Annotated[str | None, Field(default=None, description="Filter emails by subject.")] = None,
-    from_address: Annotated[str | None, Field(default=None, description="Filter emails by sender address.")] = None,
-    to_address: Annotated[str | None, Field(default=None, description="Filter emails by recipient address.")] = None,
-    mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to count emails in.")] = "INBOX",
-    seen: Annotated[bool | None, Field(default=None, description="Filter by read status.")] = None,
-    flagged: Annotated[bool | None, Field(default=None, description="Filter by flagged status.")] = None,
-    answered: Annotated[bool | None, Field(default=None, description="Filter by replied status.")] = None,
+        account_name: Annotated[str, Field(description="邮件账户名称。")],
+        before: Annotated[
+            datetime | None,
+            Field(default=None, description="此时间（UTC）之前的邮件。"),
+        ] = None,
+        since: Annotated[
+            datetime | None,
+            Field(default=None, description="此时间（UTC）之后的邮件。"),
+        ] = None,
+        subject: Annotated[str | None, Field(default=None, description="按主题筛选。")] = None,
+        from_address: Annotated[str | None, Field(default=None, description="按发件人筛选。")] = None,
+        to_address: Annotated[str | None, Field(default=None, description="按收件人筛选。")] = None,
+        mailbox: Annotated[str, Field(default="INBOX", description="要搜索的邮箱文件夹。")] = "INBOX",
+        seen: Annotated[bool | None, Field(default=None, description="按已读状态筛选。")] = None,
+        flagged: Annotated[bool | None, Field(default=None, description="按已标记状态筛选。")] = None,
+        answered: Annotated[bool | None, Field(default=None, description="按已回复状态筛选。")] = None,
 ) -> EmailUIDResponse:
     handler = dispatch_handler(account_name)
     return await handler.get_emails_uid(
@@ -106,47 +109,48 @@ async def get_emails_uid(
         answered=answered,
     )
 
+
 @mcp.tool(
-    description="List email metadata (email_id, subject, sender, recipients, date) without body content. Returns email_id for use with get_emails_content."
+    description="列出邮件元数据（邮件ID、主题、发件人、收件人、日期），不含正文。返回的 email_id 可用于 get_emails_content。"
 )
 async def list_emails_metadata(
-    account_name: Annotated[str, Field(description="The name of the email account.")],
-    page: Annotated[
-        int,
-        Field(default=1, description="The page number to retrieve (starting from 1)."),
-    ] = 1,
-    page_size: Annotated[int, Field(default=10, description="The number of emails to retrieve per page.")] = 10,
-    before: Annotated[
-        datetime | None,
-        Field(default=None, description="Retrieve emails before this datetime (UTC)."),
-    ] = None,
-    since: Annotated[
-        datetime | None,
-        Field(default=None, description="Retrieve emails since this datetime (UTC)."),
-    ] = None,
-    subject: Annotated[str | None, Field(default=None, description="Filter emails by subject.")] = None,
-    from_address: Annotated[str | None, Field(default=None, description="Filter emails by sender address.")] = None,
-    to_address: Annotated[
-        str | None,
-        Field(default=None, description="Filter emails by recipient address."),
-    ] = None,
-    order: Annotated[
-        Literal["asc", "desc"],
-        Field(default=None, description="Order emails by field. `asc` or `desc`."),
-    ] = "desc",
-    mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to search.")] = "INBOX",
-    seen: Annotated[
-        bool | None,
-        Field(default=None, description="Filter by read status: True=read, False=unread, None=all."),
-    ] = None,
-    flagged: Annotated[
-        bool | None,
-        Field(default=None, description="Filter by flagged/starred status: True=flagged, False=unflagged, None=all."),
-    ] = None,
-    answered: Annotated[
-        bool | None,
-        Field(default=None, description="Filter by replied status: True=replied, False=not replied, None=all."),
-    ] = None,
+        account_name: Annotated[str, Field(description="邮件账户名称。")],
+        page: Annotated[
+            int,
+            Field(default=1, description="要检索的页码（从1开始）。"),
+        ] = 1,
+        page_size: Annotated[int, Field(default=10, description="每页返回的邮件数量。")] = 10,
+        before: Annotated[
+            datetime | None,
+            Field(default=None, description="检索此时间（UTC）之前的邮件。"),
+        ] = None,
+        since: Annotated[
+            datetime | None,
+            Field(default=None, description="检索此时间（UTC）之后的邮件。"),
+        ] = None,
+        subject: Annotated[str | None, Field(default=None, description="按主题筛选邮件。")] = None,
+        from_address: Annotated[str | None, Field(default=None, description="按发件人地址筛选。")] = None,
+        to_address: Annotated[
+            str | None,
+            Field(default=None, description="按收件人地址筛选。"),
+        ] = None,
+        order: Annotated[
+            Literal["asc", "desc"],
+            Field(default=None, description="排序方式：`asc` 升序或 `desc` 降序。"),
+        ] = "desc",
+        mailbox: Annotated[str, Field(default="INBOX", description="要搜索的邮箱文件夹。")] = "INBOX",
+        seen: Annotated[
+            bool | None,
+            Field(default=None, description="按已读状态筛选：True=已读，False=未读，None=全部。"),
+        ] = None,
+        flagged: Annotated[
+            bool | None,
+            Field(default=None, description="按已标记状态筛选：True=已标记，False=未标记，None=全部。"),
+        ] = None,
+        answered: Annotated[
+            bool | None,
+            Field(default=None, description="按已回复状态筛选：True=已回复，False=未回复，None=全部。"),
+        ] = None,
 ) -> EmailMetadataPageResponse:
     handler = dispatch_handler(account_name)
 
@@ -167,97 +171,110 @@ async def list_emails_metadata(
 
 
 @mcp.tool(
-    description="Get the full content (including body) of one or more emails by their email_id. Use list_emails_metadata first to get the email_id."
+    description="根据邮件 ID 获取一封或多封邮件的完整内容（含正文）。请先使用 list_emails_metadata 获取 email_id。"
 )
 async def get_emails_content(
-    account_name: Annotated[str, Field(description="The name of the email account.")],
-    email_ids: Annotated[
-        list[str],
-        Field(
-            description="List of email_id to retrieve (obtained from list_emails_metadata). Can be a single email_id or multiple email_ids."
-        ),
-    ],
-    mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to retrieve emails from.")] = "INBOX",
-    use_cache: Annotated[bool, Field(default=True, description="Whether to use local cache.")] = True,
-    update_cache: Annotated[bool, Field(default=True, description="Whether to update local cache.")] = True,
-    cache_file: Annotated[str, Field(default='emails.json', description="Path to the local cache file.")] = 'emails.json',
+        account_name: Annotated[str, Field(description="邮件账户名称。")],
+        email_ids: Annotated[
+            list[str],
+            Field(
+                description="要检索的 email_id 列表（从 list_emails_metadata 获得）。可以是一个或多个 email_id。"
+            ),
+        ],
+        mailbox: Annotated[str, Field(default="INBOX", description="要检索邮件的邮箱文件夹。")] = "INBOX",
+        use_cache: Annotated[bool, Field(default=True, description="是否使用本地缓存。")] = True,
+        update_cache: Annotated[bool, Field(default=True, description="是否更新本地缓存。")] = True,
+        cache_file: Annotated[str, Field(default='emails.json', description="本地缓存文件路径。")] = 'emails.json',
+        cache_attachments: Annotated[bool, Field(default=False, description="是否将附件缓存到磁盘。")] = False,
+        attachment_cache_dir: Annotated[
+            str | None, Field(default="attachments", description="附件缓存目录。")] = "attachments",
 ) -> EmailContentBatchResponse:
     handler = dispatch_handler(account_name)
-    return await handler.get_emails_content(email_ids, mailbox, use_cache, update_cache, cache_file)
+    return await handler.get_emails_content(
+        email_ids, mailbox, use_cache, update_cache, cache_file, cache_attachments, attachment_cache_dir,
+    )
+
 
 @mcp.tool(
-    description="Get the full content (including body) of a single email by its email_id. Use list_emails_metadata first to get the email_id."
+    description="根据邮件 ID 获取单封邮件的完整内容（含正文）。请先使用 list_emails_metadata 获取 email_id。"
 )
 async def get_email_content(
-    account_name: Annotated[str, Field(description="The name of the email account.")],
-    email_id: Annotated[
-        str,
-        Field(
-            description="The email_id to retrieve (obtained from list_emails_metadata). a single email_id."
-        ),
-    ],
-    mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to retrieve emails from.")] = "INBOX",
-    use_cache: Annotated[bool, Field(default=True, description="Whether to use local cache.")] = True,
-    update_cache: Annotated[bool, Field(default=True, description="Whether to update local cache.")] = True,
-    cache_file: Annotated[str, Field(default='emails.json', description="Path to the local cache file.")] = 'emails.json',
+        account_name: Annotated[str, Field(description="邮件账户名称。")],
+        email_id: Annotated[
+            str,
+            Field(
+                description="要检索的 email_id（从 list_emails_metadata 获得）。单个邮件ID。"
+            ),
+        ],
+        mailbox: Annotated[str, Field(default="INBOX", description="要检索邮件的邮箱文件夹。")] = "INBOX",
+        use_cache: Annotated[bool, Field(default=True, description="是否使用本地缓存。")] = True,
+        update_cache: Annotated[bool, Field(default=True, description="是否更新本地缓存。")] = True,
+        cache_file: Annotated[str, Field(default='emails.json', description="本地缓存文件路径。")] = 'emails.json',
+        cache_attachments: Annotated[bool, Field(default=False, description="是否将附件缓存到磁盘。")] = False,
+        attachment_cache_dir: Annotated[
+            str | None, Field(default="attachments", description="附件缓存目录。")] = "attachments",
 ) -> UtilResponse:
     handler = dispatch_handler(account_name)
-    return await handler.get_email_content(email_id, mailbox, use_cache, update_cache, cache_file)
+    return await handler.get_email_content(
+        email_id, mailbox, use_cache, update_cache, cache_file, cache_attachments, attachment_cache_dir,
+    )
 
 
 @mcp.tool(
-    description="Cache all emails in the specified account."
+    description="缓存指定账户中的所有邮件。"
 )
 async def cache_emails(
-        account_name: Annotated[str, Field(description="The name of the email account.")],
-        mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to cache emails from.")] = "INBOX",
-        cache_attachments: Annotated[bool, Field(default=True, description="Whether to cache attachments.")] = True,
-        attachment_cache_dir: Annotated[str | None, Field(default="attachments", description="Path to the local cache directory for attachments.")] = "attachments",
+        account_name: Annotated[str, Field(description="邮件账户名称。")],
+        mailbox: Annotated[str, Field(default="INBOX", description="要缓存的邮箱文件夹。")] = "INBOX",
+        cache_attachments: Annotated[bool, Field(default=True, description="是否缓存附件。")] = True,
+        attachment_cache_dir: Annotated[
+            str | None, Field(default="attachments", description="附件缓存目录。")] = "attachments",
 ) -> UtilResponse:
     handler = dispatch_handler(account_name)
     return await handler.cache_emails(mailbox, cache_attachments, attachment_cache_dir)
 
+
 @mcp.tool(
-    description="Send an email using the specified account. Supports replying to emails with proper threading when in_reply_to is provided.",
+    description="使用指定账户发送邮件。支持通过 in_reply_to 参数正确回复邮件线程。",
 )
 async def send_email(
-    account_name: Annotated[str, Field(description="The name of the email account to send from.")],
-    recipients: Annotated[list[str], Field(description="A list of recipient email addresses.")],
-    subject: Annotated[str, Field(description="The subject of the email.")],
-    body: Annotated[str, Field(description="The body of the email.")],
-    cc: Annotated[
-        list[str] | None,
-        Field(default=None, description="A list of CC email addresses."),
-    ] = None,
-    bcc: Annotated[
-        list[str] | None,
-        Field(default=None, description="A list of BCC email addresses."),
-    ] = None,
-    html: Annotated[
-        bool,
-        Field(default=False, description="Whether to send the email as HTML (True) or plain text (False)."),
-    ] = False,
-    attachments: Annotated[
-        list[str] | None,
-        Field(
-            default=None,
-            description="A list of absolute file paths to attach to the email. Supports common file types (documents, images, archives, etc.).",
-        ),
-    ] = None,
-    in_reply_to: Annotated[
-        str | None,
-        Field(
-            default=None,
-            description="Message-ID of the email being replied to. Enables proper threading in email clients.",
-        ),
-    ] = None,
-    references: Annotated[
-        str | None,
-        Field(
-            default=None,
-            description="Space-separated Message-IDs for the thread chain. Usually includes in_reply_to plus ancestors.",
-        ),
-    ] = None,
+        account_name: Annotated[str, Field(description="发件账户名称。")],
+        recipients: Annotated[list[str], Field(description="收件人邮箱地址列表。")],
+        subject: Annotated[str, Field(description="邮件主题。")],
+        body: Annotated[str, Field(description="邮件正文。")],
+        cc: Annotated[
+            list[str] | None,
+            Field(default=None, description="抄送地址列表。"),
+        ] = None,
+        bcc: Annotated[
+            list[str] | None,
+            Field(default=None, description="密送地址列表。"),
+        ] = None,
+        html: Annotated[
+            bool,
+            Field(default=False, description="是否以 HTML 格式发送（True）还是纯文本（False）。"),
+        ] = False,
+        attachments: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description="要附加的本地文件绝对路径列表。支持常见文件类型（文档、图片、压缩包等）。",
+            ),
+        ] = None,
+        in_reply_to: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="所回复邮件的 Message-ID。用于在邮件客户端中正确显示线程。",
+            ),
+        ] = None,
+        references: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="线程链中的空格分隔的 Message-ID 列表。通常包含 in_reply_to 及其祖先。",
+            ),
+        ] = None,
 ) -> str:
     handler = dispatch_handler(account_name)
     await handler.send_email(
@@ -272,70 +289,72 @@ async def send_email(
         references,
     )
     recipient_str = ", ".join(recipients)
-    attachment_info = f" with {len(attachments)} attachment(s)" if attachments else ""
-    return f"Email sent successfully to {recipient_str}{attachment_info}"
+    attachment_info = f" 带 {len(attachments)} 个附件" if attachments else ""
+    return f"邮件已成功发送至 {recipient_str}{attachment_info}"
 
 
 @mcp.tool(
-    description="Delete one or more emails by their email_id. Use list_emails_metadata first to get the email_id."
+    description="根据邮件 ID 删除一封或多封邮件。请先使用 list_emails_metadata 获取 email_id。"
 )
 async def delete_emails(
-    account_name: Annotated[str, Field(description="The name of the email account.")],
-    email_ids: Annotated[
-        list[str],
-        Field(description="List of email_id to delete (obtained from list_emails_metadata)."),
-    ],
-    mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to delete emails from.")] = "INBOX",
+        account_name: Annotated[str, Field(description="邮件账户名称。")],
+        email_ids: Annotated[
+            list[str],
+            Field(description="要删除的 email_id 列表（从 list_emails_metadata 获得）。"),
+        ],
+        mailbox: Annotated[str, Field(default="INBOX", description="要删除邮件的邮箱文件夹。")] = "INBOX",
 ) -> str:
     handler = dispatch_handler(account_name)
     deleted_ids, failed_ids = await handler.delete_emails(email_ids, mailbox)
 
-    result = f"Successfully deleted {len(deleted_ids)} email(s)"
+    result = f"成功删除 {len(deleted_ids)} 封邮件"
     if failed_ids:
-        result += f", failed to delete {len(failed_ids)} email(s): {', '.join(failed_ids)}"
+        result += f"，删除失败 {len(failed_ids)} 封：{', '.join(failed_ids)}"
     return result
 
 
 @mcp.tool(
-    description="Download an email attachment and save it to the specified path. This feature must be explicitly enabled in settings (enable_attachment_download=true) due to security considerations.",
+    description="下载邮件附件并保存到指定路径。出于安全考虑，此功能需要在设置中显式启用（enable_attachment_download=true）。",
 )
 async def download_attachment(
-    account_name: Annotated[str, Field(description="The name of the email account.")],
-    email_id: Annotated[
-        str, Field(description="The email ID (obtained from list_emails_metadata or get_emails_content).")
-    ],
-    attachment_name: Annotated[
-        str, Field(description="The name of the attachment to download (as shown in the attachments list).")
-    ],
-    save_path: Annotated[str, Field(description="The absolute path where the attachment should be saved.")],
-    mailbox: Annotated[str, Field(description="The mailbox to search in (default: INBOX).")] = "INBOX",
+        account_name: Annotated[str, Field(description="邮件账户名称。")],
+        email_id: Annotated[
+            str, Field(description="邮件 ID（从 list_emails_metadata 或 get_emails_content 获得）。")
+        ],
+        attachment_name: Annotated[
+            str, Field(description="要下载的附件名称（如附件列表中显示）。")
+        ],
+        save_path: Annotated[str, Field(description="附件保存的绝对路径。")],
+        mailbox: Annotated[str, Field(description="要搜索的邮箱文件夹（默认：INBOX）。")] = "INBOX",
 ) -> AttachmentDownloadResponse:
     settings = get_settings()
     if not settings.enable_attachment_download:
         msg = (
-            "Attachment download is disabled. Set 'enable_attachment_download=true' in settings to enable this feature."
+            "附件下载功能已禁用。请在设置中设置 'enable_attachment_download=true' 以启用此功能。"
         )
         raise PermissionError(msg)
 
     handler = dispatch_handler(account_name)
     return await handler.download_attachment(email_id, attachment_name, save_path, mailbox)
 
+
 @mcp.tool(
-    description="Get the status of a cache operation."
+    description="获取后台缓存操作的状态。"
 )
 async def get_cache_status(
-        account_name: Annotated[str, Field(description="The name of the email account.")],
-        task_id: Annotated[str, Field(description="The task ID of the cache operation.")],
-   ):
+        account_name: Annotated[str, Field(description="邮件账户名称。")],
+        task_id: Annotated[str, Field(description="缓存操作的任务 ID。")],
+) -> UtilResponse:
     handler = dispatch_handler(account_name)
     return await handler.get_cache_status(task_id)
 
+
 @mcp.tool(
-    description="Download an email attachment and save it to the specified path."
+    description="获取邮件附件的 Base64 编码（不保存到磁盘）。"
 )
 async def get_attachment_by_base64(
-    account_name: Annotated[str, Field(description="The name of the email account.")],
-    email_id: Annotated[str, Field(description="The email ID (obtained from list_emails_metadata or get_emails_content).")],
+        account_name: Annotated[str, Field(description="邮件账户名称。")],
+        email_id: Annotated[str, Field(description="邮件 ID（从 list_emails_metadata 或 get_emails_content 获得）。")],
 ) -> UtilResponse:
     handler = dispatch_handler(account_name)
     return await handler.get_attachment_by_base64(email_id)

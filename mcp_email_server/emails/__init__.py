@@ -10,7 +10,7 @@ if TYPE_CHECKING:
         EmailCountResponse,
         EmailUIDResponse,
         UtilResponse,
-)
+    )
 
 
 class EmailHandler(abc.ABC):
@@ -72,19 +72,19 @@ class EmailHandler(abc.ABC):
 
     @abc.abstractmethod
     async def get_emails_metadata(
-        self,
-        page: int = 1,
-        page_size: int = 10,
-        before: datetime | None = None,
-        since: datetime | None = None,
-        subject: str | None = None,
-        from_address: str | None = None,
-        to_address: str | None = None,
-        order: str = "desc",
-        mailbox: str = "INBOX",
-        seen: bool | None = None,
-        flagged: bool | None = None,
-        answered: bool | None = None,
+            self,
+            page: int = 1,
+            page_size: int = 10,
+            before: datetime | None = None,
+            since: datetime | None = None,
+            subject: str | None = None,
+            from_address: str | None = None,
+            to_address: str | None = None,
+            order: str = "desc",
+            mailbox: str = "INBOX",
+            seen: bool | None = None,
+            flagged: bool | None = None,
+            answered: bool | None = None,
     ) -> "EmailMetadataPageResponse":
         """
         Get email metadata only (without body content) for better performance.
@@ -111,7 +111,9 @@ class EmailHandler(abc.ABC):
             mailbox: str = "INBOX",
             use_cache: bool = True,
             update_cache: bool = True,
-            cache_file: str = 'emails.json'
+            cache_file: str = 'emails.json',
+            cache_attachments: bool = True,
+            attachment_cache_dir: str = "attachments"
     ) -> "EmailContentBatchResponse":
         """
         Get full content (including body) of multiple emails by their email IDs (IMAP UIDs)
@@ -124,7 +126,9 @@ class EmailHandler(abc.ABC):
             mailbox: str = "INBOX",
             use_cache: bool = True,
             update_cache: bool = True,
-            cache_file: str = 'emails.json'
+            cache_file: str = 'emails.json',
+            cache_attachments: bool = True,
+            attachment_cache_dir: str = "attachments",
     ) -> "UtilResponse":
         """
         Get full content (including body) of a single email by its email ID (IMAP UID)
@@ -142,16 +146,16 @@ class EmailHandler(abc.ABC):
 
     @abc.abstractmethod
     async def send_email(
-        self,
-        recipients: list[str],
-        subject: str,
-        body: str,
-        cc: list[str] | None = None,
-        bcc: list[str] | None = None,
-        html: bool = False,
-        attachments: list[str] | None = None,
-        in_reply_to: str | None = None,
-        references: str | None = None,
+            self,
+            recipients: list[str],
+            subject: str,
+            body: str,
+            cc: list[str] | None = None,
+            bcc: list[str] | None = None,
+            html: bool = False,
+            attachments: list[str] | None = None,
+            in_reply_to: str | None = None,
+            references: str | None = None,
     ) -> None:
         """
         Send email
@@ -176,11 +180,11 @@ class EmailHandler(abc.ABC):
 
     @abc.abstractmethod
     async def download_attachment(
-        self,
-        email_id: str,
-        attachment_name: str,
-        save_path: str,
-        mailbox: str = "INBOX",
+            self,
+            email_id: str,
+            attachment_name: str,
+            save_path: str,
+            mailbox: str = "INBOX",
     ) -> "AttachmentDownloadResponse":
         """
         Download an email attachment and save it to the specified path.
