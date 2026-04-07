@@ -30,13 +30,19 @@ async def get_account(account_name: str) -> EmailSettings | ProviderSettings | N
     return settings.get_account(account_name, masked=True)
 
 
-@mcp.tool(description="列出所有已配置的邮件账户（凭证已脱敏）。")
+@mcp.tool(
+    name="列出所有账户",
+    description="列出所有已配置的邮件账户（凭证已脱敏）。"
+)
 async def list_available_accounts() -> list[AccountAttributes]:
     settings = get_settings()
     return [account.masked() for account in settings.get_accounts()]
 
 
-@mcp.tool(description="添加一个新的邮件账户配置到设置中。")
+@mcp.tool(
+    name="添加邮件账户",
+    description="添加一个新的邮件账户配置到设置中。"
+)
 async def add_email_account(email: EmailSettings) -> str:
     settings = get_settings()
     settings.add_email(email)
@@ -44,7 +50,10 @@ async def add_email_account(email: EmailSettings) -> str:
     return f"成功添加邮件账户 '{email.account_name}'"
 
 
-@mcp.tool(description="获取符合指定条件的邮件总数。")
+@mcp.tool(
+    name="获取邮件总数",
+    description="获取符合指定条件的邮件总数。"
+)
 async def get_emails_count(
         account_name: Annotated[str, Field(description="邮件账户名称。")],
         before: Annotated[
@@ -77,7 +86,10 @@ async def get_emails_count(
     )
 
 
-@mcp.tool(description="获取符合给定过滤条件的邮件 UID 列表。")
+@mcp.tool(
+    name="获取邮件 UID 列表",
+    description="获取符合给定过滤条件的邮件 UID 列表。"
+)
 async def get_emails_uid(
         account_name: Annotated[str, Field(description="邮件账户名称。")],
         before: Annotated[
@@ -111,6 +123,7 @@ async def get_emails_uid(
 
 
 @mcp.tool(
+    name="列出邮件元数据",
     description="列出邮件元数据（邮件ID、主题、发件人、收件人、日期），不含正文。返回的 email_id 可用于 get_emails_content。"
 )
 async def list_emails_metadata(
@@ -171,6 +184,7 @@ async def list_emails_metadata(
 
 
 @mcp.tool(
+    name="获取多个邮件内容",
     description="根据邮件 ID 获取一封或多封邮件的完整内容（含正文）。请先使用 list_emails_metadata 获取 email_id。"
 )
 async def get_emails_content(
@@ -196,6 +210,7 @@ async def get_emails_content(
 
 
 @mcp.tool(
+    name="获取单个邮件内容",
     description="根据邮件 ID 获取单封邮件的完整内容（含正文）。请先使用 list_emails_metadata 获取 email_id。"
 )
 async def get_email_content(
@@ -221,6 +236,7 @@ async def get_email_content(
 
 
 @mcp.tool(
+    name="缓存邮件",
     description="缓存指定账户中的所有邮件。"
 )
 async def cache_emails(
@@ -235,6 +251,7 @@ async def cache_emails(
 
 
 @mcp.tool(
+    name="发送邮件",
     description="使用指定账户发送邮件。支持通过 in_reply_to 参数正确回复邮件线程。",
 )
 async def send_email(
@@ -294,6 +311,7 @@ async def send_email(
 
 
 @mcp.tool(
+    name="删除邮件",
     description="根据邮件 ID 删除一封或多封邮件。请先使用 list_emails_metadata 获取 email_id。"
 )
 async def delete_emails(
@@ -314,6 +332,7 @@ async def delete_emails(
 
 
 @mcp.tool(
+    name="下载邮件附件",
     description="下载邮件附件并保存到指定路径。出于安全考虑，此功能需要在设置中显式启用（enable_attachment_download=true）。",
 )
 async def download_attachment(
@@ -339,6 +358,7 @@ async def download_attachment(
 
 
 @mcp.tool(
+    name="获取缓存状态",
     description="获取后台缓存操作的状态。"
 )
 async def get_cache_status(
@@ -350,6 +370,7 @@ async def get_cache_status(
 
 
 @mcp.tool(
+    name="获取邮件附件的 Base64 编码",
     description="获取邮件附件的 Base64 编码（不保存到磁盘）。"
 )
 async def get_attachment_by_base64(
