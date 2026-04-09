@@ -31,7 +31,7 @@ async def get_account(account_name: str) -> EmailSettings | ProviderSettings | N
 
 
 @mcp.tool(
-    name="列出所有账户",
+    title="列出所有账户",
     description="列出所有已配置的邮件账户（凭证已脱敏）。"
 )
 async def list_available_accounts() -> list[AccountAttributes]:
@@ -40,7 +40,7 @@ async def list_available_accounts() -> list[AccountAttributes]:
 
 
 @mcp.tool(
-    name="添加邮件账户",
+    title="添加邮件账户",
     description="添加一个新的邮件账户配置到设置中。"
 )
 async def add_email_account(email: EmailSettings) -> str:
@@ -51,7 +51,114 @@ async def add_email_account(email: EmailSettings) -> str:
 
 
 @mcp.tool(
-    name="获取邮件总数",
+    title="添加或更新列名映射",
+    description="添加或更新一个列名映射。"
+)
+async def add_column_mapping(
+        original_name: Annotated[str, Field(description="原始列名。")],
+        standard_name: Annotated[str, Field(description="标准字段名。")],
+        overwrite: Annotated[bool, Field(description="是否覆盖已存在的映射。", default=False)]
+) -> str:
+    settings = get_settings()
+    settings.add_column_mapping(original_name, standard_name, overwrite)
+    settings.store()
+    return f"成功添加或更新列名映射 '{original_name}' -> '{standard_name}'"
+
+
+@mcp.tool(
+    title="添加或更新多个列名映射",
+    description="添加或更新多个列名映射。"
+)
+async def add_columns_mapping(
+        mappings: Annotated[dict[str, str], Field(description="列名映射字典，键为原始列名，值为标准字段名。")],
+        overwrite: Annotated[bool, Field(description="是否覆盖已存在的映射。", default=False)]
+) -> str:
+    settings = get_settings()
+    print(f"mappings: {mappings}")
+    settings.add_columns_mapping(mappings, overwrite)
+    settings.store()
+    return f"成功添加或更新多个列名映射"
+
+
+@mcp.tool(
+    title="删除列名映射",
+    description="删除一个列名映射，如果存在的话。"
+)
+async def delete_column_mapping(
+        original_name: Annotated[str, Field(description="原始列名。")]
+) -> str:
+    settings = get_settings()
+    settings.delete_column_mapping(original_name)
+    settings.store()
+    return f"成功删除列名映射 '{original_name}'"
+
+
+@mcp.tool(
+    title="删除多个列名映射",
+    description="删除多个列名映射，如果存在的话。"
+)
+async def delete_column_mapping(
+        original_names: Annotated[list[str], Field(description="原始列名列表。")]
+) -> str:
+    settings = get_settings()
+    settings.delete_columns_mapping(original_names)
+    settings.store()
+    return f"成功删除多个列名映射 '{original_names}'"
+
+
+@mcp.tool(
+    title="更新列名映射",
+    description="更新所有列名映射。"
+)
+async def update_column_mapping(
+        original_name: Annotated[str, Field(description="原始列名。")],
+        standard_name: Annotated[str, Field(description="标准字段名。")]
+) -> str:
+    settings = get_settings()
+    settings.update_column_mapping(original_name, standard_name)
+    settings.store()
+    return f"成功更新列名映射 '{original_name}' -> '{standard_name}'"
+
+
+@mcp.tool(
+    title="列出原始列名",
+    description="列出所有已配置的原始列名。"
+)
+async def list_original_name() -> UtilResponse:
+    settings = get_settings()
+    return UtilResponse(
+        data={"original_names": settings.get_original_name_list()},
+        message="成功列出所有原始列名",
+        success=True,
+    )
+
+
+@mcp.tool(
+    title="获取列名映射",
+    description="获取原始列名对应的标准字段名，不存在则返回 None。"
+)
+async def get_column_mapping(
+        original_name: Annotated[str, Field(description="原始列名。")]
+) -> str:
+    settings = get_settings()
+    return settings.get_column_mapping(original_name)
+
+
+@mcp.tool(
+    title="列出所有列名映射",
+    description="列出所有已配置的列名映射。"
+)
+async def list_column_mappings() -> UtilResponse:
+    settings = get_settings()
+    return UtilResponse(
+        data=settings.get_all_mappings(),
+        message="成功列出所有列名映射",
+        success=True,
+    )
+
+
+@mcp.tool(
+    title="获取邮件总数",
     description="获取符合指定条件的邮件总数。"
 )
 async def get_emails_count(
@@ -87,7 +194,7 @@ async def get_emails_count(
 
 
 @mcp.tool(
-    name="获取邮件 UID 列表",
+    title="获取邮件 UID 列表",
     description="获取符合给定过滤条件的邮件 UID 列表。"
 )
 async def get_emails_uid(
@@ -123,7 +230,7 @@ async def get_emails_uid(
 
 
 @mcp.tool(
-    name="列出邮件元数据",
+    title="列出邮件元数据",
     description="列出邮件元数据（邮件ID、主题、发件人、收件人、日期），不含正文。返回的 email_id 可用于 get_emails_content。"
 )
 async def list_emails_metadata(
@@ -184,33 +291,7 @@ async def list_emails_metadata(
 
 
 @mcp.tool(
-    name="获取多个邮件内容",
-    description="根据邮件 ID 获取一封或多封邮件的完整内容（含正文）。请先使用 list_emails_metadata 获取 email_id。"
-)
-async def get_emails_content(
-        account_name: Annotated[str, Field(description="邮件账户名称。")],
-        email_ids: Annotated[
-            list[str],
-            Field(
-                description="要检索的 email_id 列表（从 list_emails_metadata 获得）。可以是一个或多个 email_id。"
-            ),
-        ],
-        mailbox: Annotated[str, Field(default="INBOX", description="要检索邮件的邮箱文件夹。")] = "INBOX",
-        use_cache: Annotated[bool, Field(default=True, description="是否使用本地缓存。")] = True,
-        update_cache: Annotated[bool, Field(default=True, description="是否更新本地缓存。")] = True,
-        cache_file: Annotated[str, Field(default='emails.json', description="本地缓存文件路径。")] = 'emails.json',
-        cache_attachments: Annotated[bool, Field(default=False, description="是否将附件缓存到磁盘。")] = False,
-        attachment_cache_dir: Annotated[
-            str | None, Field(default="attachments", description="附件缓存目录。")] = "attachments",
-) -> EmailContentBatchResponse:
-    handler = dispatch_handler(account_name)
-    return await handler.get_emails_content(
-        email_ids, mailbox, use_cache, update_cache, cache_file, cache_attachments, attachment_cache_dir,
-    )
-
-
-@mcp.tool(
-    name="获取单个邮件内容",
+    title="获取单个邮件内容",
     description="根据邮件 ID 获取单封邮件的完整内容（含正文）。请先使用 list_emails_metadata 获取 email_id。"
 )
 async def get_email_content(
@@ -236,7 +317,33 @@ async def get_email_content(
 
 
 @mcp.tool(
-    name="缓存邮件",
+    title="获取多个邮件内容",
+    description="根据邮件 ID 获取一封或多封邮件的完整内容（含正文）。请先使用 list_emails_metadata 获取 email_id。"
+)
+async def get_emails_content(
+        account_name: Annotated[str, Field(description="邮件账户名称。")],
+        email_ids: Annotated[
+            list[str],
+            Field(
+                description="要检索的 email_id 列表（从 list_emails_metadata 获得）。可以是一个或多个 email_id。"
+            ),
+        ],
+        mailbox: Annotated[str, Field(default="INBOX", description="要检索邮件的邮箱文件夹。")] = "INBOX",
+        use_cache: Annotated[bool, Field(default=True, description="是否使用本地缓存。")] = True,
+        update_cache: Annotated[bool, Field(default=True, description="是否更新本地缓存。")] = True,
+        cache_file: Annotated[str, Field(default='emails.json', description="本地缓存文件路径。")] = 'emails.json',
+        cache_attachments: Annotated[bool, Field(default=False, description="是否将附件缓存到磁盘。")] = False,
+        attachment_cache_dir: Annotated[
+            str | None, Field(default="attachments", description="附件缓存目录。")] = "attachments",
+) -> EmailContentBatchResponse:
+    handler = dispatch_handler(account_name)
+    return await handler.get_emails_content(
+        email_ids, mailbox, use_cache, update_cache, cache_file, cache_attachments, attachment_cache_dir,
+    )
+
+
+@mcp.tool(
+    title="缓存邮件",
     description="缓存指定账户中的所有邮件。"
 )
 async def cache_emails(
@@ -251,7 +358,7 @@ async def cache_emails(
 
 
 @mcp.tool(
-    name="发送邮件",
+    title="发送邮件",
     description="使用指定账户发送邮件。支持通过 in_reply_to 参数正确回复邮件线程。",
 )
 async def send_email(
@@ -311,8 +418,8 @@ async def send_email(
 
 
 @mcp.tool(
-    name="删除邮件",
-    description="根据邮件 ID 删除一封或多封邮件。请先使用 list_emails_metadata 获取 email_id。"
+    title="删除邮件",
+    description="根据邮件 ID 删除一封或多封邮件。请先使用 list_emails_metadata 或者 get_emails_uid 获取 email_id。"
 )
 async def delete_emails(
         account_name: Annotated[str, Field(description="邮件账户名称。")],
@@ -332,7 +439,7 @@ async def delete_emails(
 
 
 @mcp.tool(
-    name="下载邮件附件",
+    title="下载邮件附件",
     description="下载邮件附件并保存到指定路径。出于安全考虑，此功能需要在设置中显式启用（enable_attachment_download=true）。",
 )
 async def download_attachment(
@@ -358,7 +465,7 @@ async def download_attachment(
 
 
 @mcp.tool(
-    name="获取缓存状态",
+    title="获取缓存状态",
     description="获取后台缓存操作的状态。"
 )
 async def get_cache_status(
@@ -370,7 +477,7 @@ async def get_cache_status(
 
 
 @mcp.tool(
-    name="获取邮件附件的 Base64 编码",
+    title="获取邮件附件的 Base64 编码",
     description="获取邮件附件的 Base64 编码（不保存到磁盘）。"
 )
 async def get_attachment_by_base64(

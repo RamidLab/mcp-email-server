@@ -89,28 +89,28 @@ class EmailSettings(AccountAttributes):
 
     @classmethod
     def init(
-        cls,
-        *,
-        account_name: str,
-        full_name: str,
-        email_address: str,
-        user_name: str,
-        password: str,
-        imap_host: str,
-        smtp_host: str,
-        imap_user_name: str | None = None,
-        imap_password: str | None = None,
-        imap_port: int = 993,
-        imap_ssl: bool = True,
-        imap_verify_ssl: bool = True,
-        smtp_port: int = 465,
-        smtp_ssl: bool = True,
-        smtp_start_ssl: bool = False,
-        smtp_verify_ssl: bool = True,
-        smtp_user_name: str | None = None,
-        smtp_password: str | None = None,
-        save_to_sent: bool = True,
-        sent_folder_name: str | None = None,
+            cls,
+            *,
+            account_name: str,
+            full_name: str,
+            email_address: str,
+            user_name: str,
+            password: str,
+            imap_host: str,
+            smtp_host: str,
+            imap_user_name: str | None = None,
+            imap_password: str | None = None,
+            imap_port: int = 993,
+            imap_ssl: bool = True,
+            imap_verify_ssl: bool = True,
+            smtp_port: int = 465,
+            smtp_ssl: bool = True,
+            smtp_start_ssl: bool = False,
+            smtp_verify_ssl: bool = True,
+            smtp_user_name: str | None = None,
+            smtp_password: str | None = None,
+            save_to_sent: bool = True,
+            sent_folder_name: str | None = None,
     ) -> EmailSettings:
         return cls(
             account_name=account_name,
@@ -227,6 +227,7 @@ class Settings(BaseSettings):
     providers: list[ProviderSettings] = []
     db_location: str = CONFIG_PATH.with_name("db.sqlite3").as_posix()
     enable_attachment_download: bool = False
+    column_mappings: dict[str, str] = Field(default_factory=dict)
 
     model_config = SettingsConfigDict(toml_file=CONFIG_PATH, validate_assignment=True, revalidate_instances="always")
 
@@ -290,6 +291,44 @@ class Settings(BaseSettings):
             return [account.masked() for account in accounts]
         return accounts
 
+    def add_column_mapping(self, original_name: str, standard_name: str, overwrite: bool = False) -> None:
+        """添加或更新一个列名映射。若 overwrite=False 且映射已存在，则不做任何操作。"""
+        if overwrite or original_name not in self.column_mappings:
+            self.column_mappings[original_name] = standard_name
+
+    def add_columns_mapping(self, mappings: dict[str, str], overwrite: bool = False) -> None:
+        """添加或更新多个列名映射。若 overwrite=False 且映射已存在，则不做任何操作。"""
+        logger.debug(f"mappings: {mappings}")
+        for original_name, standard_name in mappings.items():
+            logger.info(f"Adding column mapping '{original_name}' to '{standard_name}'")
+            self.add_column_mapping(original_name, standard_name, overwrite)
+
+    def delete_column_mapping(self, original_name: str) -> None:
+        """删除一个列名映射，如果存在的话。"""
+        self.column_mappings.pop(original_name, None)
+
+    def delete_columns_mapping(self, original_names: list[str]) -> None:
+        """删除多个列名映射，如果存在的话。"""
+        for original_name in original_names:
+            self.delete_column_mapping(original_name)
+
+    def update_column_mapping(self, original_name: str, new_standard_name: str) -> None:
+        """更新已有映射的标准字段名。如果原映射不存在则不做任何事。"""
+        if original_name in self.column_mappings:
+            self.column_mappings[original_name] = new_standard_name
+
+    def get_original_name_list(self) -> list[str]:
+        """返回所有原始列名的列表。"""
+        return list(self.column_mappings.keys())
+
+    def get_column_mapping(self, original_name: str) -> str | None:
+        """获取原始列名对应的标准字段名，不存在则返回 None。"""
+        return self.column_mappings.get(original_name)
+
+    def get_all_mappings(self) -> dict[str, str]:
+        """返回所有列映射的副本。"""
+        return self.column_mappings.copy()
+
     @model_validator(mode="after")
     @classmethod
     def check_unique_account_names(cls, obj: Settings) -> Settings:
@@ -307,12 +346,12 @@ class Settings(BaseSettings):
 
     @classmethod
     def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
+            cls,
+            settings_cls: type[BaseSettings],
+            init_settings: PydanticBaseSettingsSource,
+            env_settings: PydanticBaseSettingsSource,
+            dotenv_settings: PydanticBaseSettingsSource,
+            file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (TomlConfigSettingsSource(settings_cls),)
 
@@ -323,7 +362,7 @@ class Settings(BaseSettings):
     def store(self) -> None:
         toml_file = self.model_config["toml_file"]
         toml_file.parent.mkdir(parents=True, exist_ok=True)
-        toml_file.write_text(self._to_toml())
+        toml_file.write_text(self._to_toml(), encoding='utf-8')
         logger.info(f"Settings stored in {toml_file}")
 
 
