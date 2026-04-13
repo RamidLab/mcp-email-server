@@ -46,6 +46,7 @@ class EmailBodyResponse(EmailMetadata):
     """Single email body response - extends EmailMetadata with body content"""
 
     body: str
+    html_body: str
 
 
 class EmailContentBatchResponse(BaseModel):
@@ -66,13 +67,16 @@ class AttachmentDownloadResponse(BaseModel):
     size: int
     saved_path: str
 
+
 class EmailCountResponse(BaseModel):
     """Email count response"""
     email_count: int
 
+
 class EmailUIDResponse(BaseModel):
     """Email count response"""
     email_uid_list: list[str]
+
 
 class UtilResponse(BaseModel):
     """Util response"""

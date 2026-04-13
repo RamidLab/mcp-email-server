@@ -5,6 +5,7 @@ import json
 import mimetypes
 import os
 import re
+import socket
 import ssl
 import uuid
 from collections.abc import AsyncGenerator
@@ -69,10 +70,13 @@ async def _send_imap_id(imap: aioimaplib.IMAP4 | aioimaplib.IMAP4_SSL) -> None:
 def _create_ssl_context(verify_ssl: bool) -> ssl.SSLContext | None:
     """创建 SSL 上下文，verify_ssl=False 时接受自签名证书。"""
     if verify_ssl:
-        return None
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+        ctx = ssl.create_default_context()
+    else:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        # 设置 ALPN 协议（部分服务器需要）
+    ctx.set_alpn_protocols(["imap"])
     return ctx
 
 
@@ -96,8 +100,24 @@ class EmailClient:
         """创建原始 IMAP 连接对象（未登录）。"""
         if self.email_server.use_ssl:
             ctx = _create_ssl_context(self.email_server.verify_ssl)
-            return self.imap_class(self.email_server.host, self.email_server.port, ssl_context=ctx)
-        return self.imap_class(self.email_server.host, self.email_server.port)
+            conn = self.imap_class(self.email_server.host, self.email_server.port, ssl_context=ctx)
+        else:
+            conn = self.imap_class(self.email_server.host, self.email_server.port)
+
+        try:
+            if hasattr(conn, 'protocol') and conn.protocol:
+                transport = conn.protocol.transport
+                if transport:
+                    sock = transport.get_extra_info('socket')
+                    if sock:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        if hasattr(socket, 'TCP_KEEPIDLE'):
+                            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+                            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+                            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+        except Exception as e:
+            logger.debug(f"Failed to set TCP keepalive: {e}")
+        return conn
 
     @asynccontextmanager
     async def _with_imap(self, mailbox: str = "INBOX"):
@@ -107,16 +127,24 @@ class EmailClient:
         """
         imap = self._imap_connect()
         try:
-            await imap.wait_hello_from_server()
-            await imap.login(self.email_server.user_name, self.email_server.password)
+            await asyncio.wait_for(imap.wait_hello_from_server(), timeout=10.0)
+            await asyncio.wait_for(imap.login(self.email_server.user_name, self.email_server.password), timeout=10.0)
             await _send_imap_id(imap)
-            await imap.select(_quote_mailbox(mailbox))
+            await asyncio.wait_for(imap.select(_quote_mailbox(mailbox)), timeout=10.0)
             yield imap
         finally:
+            # 安全关闭：只尝试 logout，不强制操作底层 transport
             try:
-                await imap.logout()
-            except Exception as e:
-                logger.debug(f"IMAP logout ignored: {e}")
+                await asyncio.wait_for(imap.logout(), timeout=5.0)
+            except Exception:
+                # 如果 logout 失败，尝试直接关闭协议
+                try:
+                    if hasattr(imap, 'protocol') and imap.protocol:
+                        imap.protocol.connection_lost(None)
+                        if hasattr(imap.protocol, 'transport') and imap.protocol.transport:
+                            imap.protocol.transport.close()
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # 内部搜索与数据处理
@@ -410,7 +438,10 @@ class EmailClient:
 
         if len(body) > MAX_BODY_LENGTH:
             body = body[:MAX_BODY_LENGTH] + "...[TRUNCATED]"
-        return body, attachments
+
+        if len(html_body) > MAX_BODY_LENGTH:
+            html_body = html_body[:MAX_BODY_LENGTH] + "...[TRUNCATED]"
+        return body, html_body, attachments
 
     def _parse_email_data(
             self,
@@ -420,8 +451,9 @@ class EmailClient:
             attachment_cache_dir: str | None = "attachments",
     ) -> dict[str, Any]:
         """将原始邮件字节解析为结构化字典。"""
-        parser = BytesParser(policy=default)
-        msg = parser.parsebytes(raw_email)
+        email_parser = email.parser.BytesFeedParser()
+        email_parser.feed(raw_email)
+        msg = email_parser.close()
 
         subject = self.check_field(msg.get("Subject", ""))
         sender = self.check_field(msg.get("From", ""))
@@ -429,7 +461,7 @@ class EmailClient:
         _date = self._parse_date(msg.get("Date", ""))
         message_id = msg.get("Message-ID")
 
-        body, attachments = self._extract_body_from_message(
+        body, html_body, attachments = self._extract_body_from_message(
             msg, cache_attachments, email_id, attachment_cache_dir
         )
 
@@ -440,6 +472,7 @@ class EmailClient:
             "from": sender,
             "to": to,
             "body": body,
+            "html_body": html_body,
             "date": _date,
             "attachments": attachments,
             "cache_attachments": cache_attachments and bool(attachments),
@@ -565,7 +598,7 @@ class EmailClient:
             mailbox: str = "INBOX",
             cache_attachments: bool = False,
             attachment_cache_dir: str | None = "attachments",
-            use_fallback: bool = True,  # 当批量失败时是否降级到单封备用模式
+            use_fallback: bool = False,  # 当批量失败时是否降级到单封备用模式
     ) -> dict[str, Any]:
         """
         批量获取多封邮件内容。
@@ -573,6 +606,8 @@ class EmailClient:
         则降级为循环单封获取（使用备用方法）。
         """
         async with self._with_imap(mailbox) as imap:
+            # 发送 NOOP 重置服务器空闲计时器
+            await imap.noop()
             # 尝试批量获取
             raw_map = await self._fetch_raw_emails_batch(imap, email_ids)
             # 检查是否批量完全失败（所有结果都是 None）
@@ -602,6 +637,7 @@ class EmailClient:
                             recipients=data["to"],
                             date=data["date"],
                             body=data["body"],
+                            html_body=data["html_body"],
                             attachments=data["attachments"],
                             cache_attachments=data["cache_attachments"],
                         )
@@ -966,7 +1002,7 @@ class ClassicEmailHandler(EmailHandler):
         total = await self.incoming_client.get_email_count(mailbox=mailbox, **kwargs)
         emails = []
         async for meta in self.incoming_client.get_emails_metadata_stream(
-                page=page, page_size=page_size, total=total, order=order, mailbox=mailbox, **kwargs
+                page=page, page_size=page_size, order=order, mailbox=mailbox, **kwargs
         ):
             emails.append(EmailMetadata.from_email(meta))
         return EmailMetadataPageResponse(
@@ -1046,7 +1082,7 @@ class ClassicEmailHandler(EmailHandler):
 
         if missing:
             result = await self.incoming_client.get_emails_body_by_id(
-                missing, mailbox, cache_attachments, attachment_cache_dir
+                missing, mailbox, cache_attachments, attachment_cache_dir, use_fallback=False
             )
             for email_obj in result.get("emails_content", []):
                 emails.append(email_obj)
@@ -1123,8 +1159,8 @@ class ClassicEmailHandler(EmailHandler):
                 self._cache_tasks[task_id].update({"status": "completed", "message": "无新邮件需要缓存"})
                 return
 
-            # 分块处理（每块 500 封）
-            chunk_size = 500
+            # 分块处理（每块 50 封）
+            chunk_size = 50
             for i in range(0, len(new_uids), chunk_size):
                 chunk = new_uids[i:i + chunk_size]
                 resp = await self.get_emails_content(
@@ -1166,25 +1202,39 @@ class ClassicEmailHandler(EmailHandler):
     # ------------------------------------------------------------------
     # 辅助工具 - Base64 附件读取
     # ------------------------------------------------------------------
-
     @staticmethod
-    async def get_file_base64(file_path: str) -> str:
-        with open(file_path, 'rb') as f:
-            return base64.b64encode(f.read()).decode('utf-8')
+    async def get_file_info(file_path: str) -> dict:
+        """获取文件信息：base64, 文件名, 扩展名, MIME类型"""
+        path = Path(file_path)
+        file_name = path.name
+        file_extension = path.suffix.lower()
+        mime_type, _ = mimetypes.guess_type(file_path)
+        if mime_type is None:
+            # 默认二进制
+            mime_type = 'application/octet-stream'
+        file_base64 = base64.b64encode(open(file_path, 'rb').read()).decode('utf-8')
+        return {
+            "fileName": file_name,
+            "fileExtension": file_extension,
+            "mimeType": mime_type,
+            "fileBase64": file_base64
+        }
 
     async def get_attachment_by_base64(self, email_id: str) -> UtilResponse:
-        """根据邮件 ID 读取本地缓存的附件，返回 base64 字典。"""
+        """根据邮件 ID 读取本地缓存的附件，返回附件信息列表。"""
         folder = Path(f"attachments/{email_id}")
         if not folder.exists() or not folder.is_dir():
             return UtilResponse(success=False, message=f"附件目录不存在: {email_id}", data=None)
-        result = {}
+        attachments_info = []
         for file in folder.iterdir():
             if file.is_file():
                 try:
-                    result[file.name] = await self.get_file_base64(str(file))
+                    info = await self.get_file_info(str(file))
+                    attachments_info.append(info)
                 except Exception as e:
                     logger.error(f"读取附件 {file} 失败: {e}")
                     return UtilResponse(success=False, message=f"读取失败: {e}", data=None)
-        if not result:
+        if not attachments_info:
             return UtilResponse(success=False, message=f"目录 {email_id} 下无附件", data=None)
-        return UtilResponse(success=True, message=f"成功读取 {len(result)} 个附件", data=result)
+        return UtilResponse(success=True, message=f"成功读取 {len(attachments_info)} 个附件",
+                            data={"attachments": attachments_info})
