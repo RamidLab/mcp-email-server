@@ -23,7 +23,7 @@ from typing import Any, TypeVar, Callable
 import aiofiles
 import aioimaplib
 import aiosmtplib
-
+import aiosqlite
 from mcp_email_server.config import EmailServer, EmailSettings
 from mcp_email_server.emails import EmailHandler
 from mcp_email_server.emails.models import (
@@ -889,9 +889,14 @@ class ClassicEmailHandler(EmailHandler):
         )
         self.save_to_sent = email_settings.save_to_sent
         self.sent_folder_name = email_settings.sent_folder_name
+        self._cache_lock = asyncio.Lock()
+
+        # SQLite 替代 JSON 文件存储处理结果
+        self.db_proc_results = 'emails_proc_results.db'
+        self._db_initialized = False
 
     # ------------------------------------------------------------------
-    # 内部缓存工具方法
+    # 内部缓存工具方法 (保留 JSON 相关工具，因为其他方法仍在使用)
     # ------------------------------------------------------------------
 
     class _DateTimeEncoder(json.JSONEncoder):
@@ -911,14 +916,15 @@ class ClassicEmailHandler(EmailHandler):
                 if content.strip():
                     return json.loads(content)
         except (json.JSONDecodeError, IOError) as e:
-            logger.warning(f"Failed to load {filename}: {e}")
+            raise RuntimeError(f"Cache file corrupted: {filename}") from e
         return {}
 
     @staticmethod
     async def _save_json_file(filename: str, data: dict) -> None:
-        """异步保存字典到 JSON 文件（覆盖写入）。"""
-        async with aiofiles.open(filename, 'w', encoding='utf-8') as f:
-            await f.write(json.dumps(data, ensure_ascii=False, indent=2, cls=ClassicEmailHandler._DateTimeEncoder))
+        tmp = filename + '.tmp'
+        async with aiofiles.open(tmp, 'w', encoding='utf-8') as f:
+            await f.write(json.dumps(data, ensure_ascii=False, indent=2))
+        os.replace(tmp, filename)
 
     @staticmethod
     async def _update_json_file(filename: str, updater: Callable[[dict], dict]) -> dict:
@@ -943,7 +949,7 @@ class ClassicEmailHandler(EmailHandler):
             for _email in emails_chunk:
                 if hasattr(_email, 'model_dump'):
                     d = _email.model_dump()
-                elif hasattr(email, 'dict'):
+                elif hasattr(_email, 'dict'):
                     d = _email.dict()
                 else:
                     d = _email if isinstance(_email, dict) else vars(_email)
@@ -958,7 +964,6 @@ class ClassicEmailHandler(EmailHandler):
     async def _record_failed_uids(uids, reason="", filename='failed_emails.json'):
         if not uids:
             return
-        from datetime import datetime
         now = datetime.now().isoformat()
 
         def updater(existing: dict) -> dict:
@@ -978,6 +983,122 @@ class ClassicEmailHandler(EmailHandler):
             return existing
 
         await ClassicEmailHandler._update_json_file(filename, updater)
+
+    # ---------- SQLite 处理结果存储 ----------
+    async def _ensure_proc_results_db(self):
+        """确保 SQLite 数据库和表已初始化，并启用 WAL 模式。"""
+        if self._db_initialized:
+            return
+        async with aiosqlite.connect(self.db_proc_results) as db:
+            await db.execute('''
+                             CREATE TABLE IF NOT EXISTS proc_results
+                             (
+                                 id
+                                 INTEGER
+                                 PRIMARY
+                                 KEY
+                                 AUTOINCREMENT,
+                                 email_id
+                                 INTEGER
+                                 NOT
+                                 NULL,
+                                 status
+                                 TEXT,
+                                 message
+                                 TEXT,
+                                 created_at
+                                 TEXT
+                                 NOT
+                                 NULL,
+                                 raw_json
+                                 TEXT
+                                 NOT
+                                 NULL
+                             )
+                             ''')
+            await db.execute('CREATE INDEX IF NOT EXISTS idx_email_id ON proc_results(email_id)')
+            await db.execute('PRAGMA journal_mode=WAL')
+            await db.commit()
+        self._db_initialized = True
+
+    async def save_proc_result(self, result: dict):
+        """保存邮件处理结果到 SQLite，email_id 转为整数，若与上一条完全相同则跳过。"""
+        await self._ensure_proc_results_db()
+
+        email_id = result.pop("email_id")
+        try:
+            email_id_int = int(email_id)
+        except (ValueError, TypeError):
+            return UtilResponse(success=False, message=f"email_id 必须为可转为整数的值: {email_id}", data=None)
+
+        result["created_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        raw_json = json.dumps(result, ensure_ascii=False)
+
+        async with aiosqlite.connect(self.db_proc_results) as db:
+            # 开启一个写事务，保证检查+插入的原子性
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                # 查询该 email_id 最新一条记录的 raw_json
+                cursor = await db.execute(
+                    "SELECT raw_json FROM proc_results WHERE email_id = ? ORDER BY id DESC LIMIT 1",
+                    (email_id_int,)
+                )
+                row = await cursor.fetchone()
+                if row:
+                    last_data = json.loads(row[0])
+                    # 比较时排除自动添加的 created_at（因为时间肯定不同）
+                    this_compare = {k: v for k, v in result.items() if k != "created_at"}
+                    last_compare = {k: v for k, v in last_data.items() if k != "created_at"}
+                    if this_compare == last_compare:
+                        # 完全相同，跳过插入
+                        await db.commit()
+                        return UtilResponse(
+                            success=True,
+                            message=f"邮件 {email_id_int} 结果与上次相同，跳过保存",
+                            data={"skipped": True}
+                        )
+
+                # 不同或首次记录，插入新行
+                await db.execute(
+                    "INSERT INTO proc_results (email_id, status, message, created_at, raw_json) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (email_id_int, result.get("status"), result.get("message"),
+                     result["created_at"], raw_json)
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+
+        return UtilResponse(
+            success=True,
+            message=f"成功保存邮件 {email_id_int} 的处理结果",
+            data={"email_id": email_id_int}
+        )
+
+    async def get_proc_results(self, email_id: str) -> UtilResponse:
+        """查询某个邮件的所有处理历史记录。"""
+        await self._ensure_proc_results_db()
+        async with aiosqlite.connect(self.db_proc_results) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT email_id, status, message, created_at, raw_json "
+                "FROM proc_results WHERE email_id = ? ORDER BY id ASC",
+                (email_id,)
+            )
+            rows = await cursor.fetchall()
+            results = []
+            for row in rows:
+                data = json.loads(row["raw_json"])
+                data["email_id"] = row["email_id"]
+                data["created_at"] = row["created_at"]
+                results.append(data)
+
+            return UtilResponse(
+                success=True,
+                message=f"找到 {len(results)} 条记录",
+                data={"history": results}
+            )
 
     # ------------------------------------------------------------------
     # 公共 API - 数量/UID/元数据
@@ -1144,8 +1265,9 @@ class ClassicEmailHandler(EmailHandler):
             total_all = len(all_uids)
 
             cache_file = 'emails.json'
-            cache_data = await self._load_json_file(cache_file)
-            existing_uids = set(cache_data.keys())
+            async with self._cache_lock:
+                cache_data = await self._load_json_file(cache_file)
+                existing_uids = set(cache_data.keys())
             new_uids = [uid for uid in all_uids if uid not in existing_uids]
             total_new = len(new_uids)
 
@@ -1159,7 +1281,7 @@ class ClassicEmailHandler(EmailHandler):
                 self._cache_tasks[task_id].update({"status": "completed", "message": "无新邮件需要缓存"})
                 return
 
-            # 分块处理（每块 50 封）
+            fetched_emails = {}
             chunk_size = 50
             for i in range(0, len(new_uids), chunk_size):
                 chunk = new_uids[i:i + chunk_size]
@@ -1172,11 +1294,24 @@ class ClassicEmailHandler(EmailHandler):
                     cache_attachments=cache_attachments,
                     attachment_cache_dir=cache_dir,
                 )
+                if resp.success and resp.data:
+                    fetched_emails.update(resp.data)
+                if resp.failed_ids:
+                    await self._record_failed_uids(resp.failed_ids, "缓存获取失败")
                 self._cache_tasks[task_id]["processed"] = min(i + len(chunk), len(new_uids))
                 self._cache_tasks[task_id][
                     "message"] = f"已缓存 {self._cache_tasks[task_id]['processed']} / {len(new_uids)}"
-                if resp.failed_ids:
-                    await self._record_failed_uids(resp.failed_ids, "缓存获取失败")
+
+            if fetched_emails:
+                async with self._cache_lock:
+                    cache_data = await self._load_json_file(cache_file)
+                    cache_data.update(fetched_emails)
+                    try:
+                        sorted_items = sorted(cache_data.items(), key=lambda x: int(x[0]))
+                    except ValueError:
+                        sorted_items = sorted(cache_data.items(), key=lambda x: x[0])
+                    cache_data = dict(sorted_items)
+                    await self._save_json_file(cache_file, cache_data)
 
             self._cache_tasks[task_id].update({"status": "completed", "message": "缓存完成"})
         except Exception as e:

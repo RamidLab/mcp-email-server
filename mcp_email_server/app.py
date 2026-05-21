@@ -486,3 +486,14 @@ async def get_attachment_by_base64(
 ) -> UtilResponse:
     handler = dispatch_handler(account_name)
     return await handler.get_attachment_by_base64(email_id)
+
+@mcp.tool(
+    title="保存邮件处理结果",
+    description="保存邮件处理结果到本地缓存。"
+)
+async def save_proc_result(
+        account_name: Annotated[str, Field(description="邮件账户名称。")],
+        result: Annotated[dict, Field(description="邮件处理结果。")],
+) -> UtilResponse:
+    handler = dispatch_handler(account_name)
+    return await handler.save_proc_result(result)

@@ -216,3 +216,9 @@ class EmailHandler(abc.ABC):
         """
         根据邮件 ID 获取附件的 base64 编码
         """
+
+    @abc.abstractmethod
+    async def save_proc_result(self, result: dict) -> "UtilResponse":
+        """
+        保存邮件处理结果
+        """
