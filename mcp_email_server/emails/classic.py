@@ -921,10 +921,9 @@ class ClassicEmailHandler(EmailHandler):
 
     @staticmethod
     async def _save_json_file(filename: str, data: dict) -> None:
-        tmp = filename + '.tmp'
-        async with aiofiles.open(tmp, 'w', encoding='utf-8') as f:
-            await f.write(json.dumps(data, ensure_ascii=False, indent=2))
-        os.replace(tmp, filename)
+        """异步保存字典到 JSON 文件（覆盖写入）。"""
+        async with aiofiles.open(filename, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(data, ensure_ascii=False, indent=2, cls=ClassicEmailHandler._DateTimeEncoder))
 
     @staticmethod
     async def _update_json_file(filename: str, updater: Callable[[dict], dict]) -> dict:
@@ -942,14 +941,14 @@ class ClassicEmailHandler(EmailHandler):
         return str(uuid.uuid4())
 
     @staticmethod
-    async def _save_emails_chunk(emails_chunk, filename='emails.json'):
+    async def _save_emails_chunk(emails_chunk, filename="emails.json"):
         """增量保存邮件到缓存，避免重复 UID。"""
 
         def updater(existing: dict) -> dict:
             for _email in emails_chunk:
-                if hasattr(_email, 'model_dump'):
+                if hasattr(_email, "model_dump"):
                     d = _email.model_dump()
-                elif hasattr(_email, 'dict'):
+                elif hasattr(_email, "dict"):
                     d = _email.dict()
                 else:
                     d = _email if isinstance(_email, dict) else vars(_email)
@@ -1294,8 +1293,8 @@ class ClassicEmailHandler(EmailHandler):
                     cache_attachments=cache_attachments,
                     attachment_cache_dir=cache_dir,
                 )
-                if resp.success and resp.data:
-                    fetched_emails.update(resp.data)
+                if resp.emails:
+                    fetched_emails.update({e.email_id: e.model_dump() for e in resp.emails})
                 if resp.failed_ids:
                     await self._record_failed_uids(resp.failed_ids, "缓存获取失败")
                 self._cache_tasks[task_id]["processed"] = min(i + len(chunk), len(new_uids))
