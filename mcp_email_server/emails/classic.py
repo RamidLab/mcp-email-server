@@ -45,6 +45,46 @@ MAX_BODY_LENGTH = 20000
 # 通用辅助函数
 # ----------------------------------------------------------------------
 
+def _encode_imap_utf7(s: str) -> str:
+    """将 Unicode 字符串编码为 IMAP modified UTF-7。
+
+    ASCII 部分原样保留，非 ASCII 部分编码为 '&...-' 格式。
+    例如 '历史邮件' -> '&U4ZT8pCuTvY-'
+    """
+    import base64
+
+    result = []
+    buf = []  # 收集连续的非 ASCII 字符
+
+    def flush_buf():
+        if buf:
+            raw = ''.join(buf).encode('utf-16-be')
+            b64 = base64.b64encode(raw).decode('ascii').rstrip('=')
+            result.append('&' + b64.replace('/', ',') + '-')
+            buf.clear()
+
+    for ch in s:
+        if ord(ch) >= 0x20 and ord(ch) <= 0x7E:
+            # ASCII 可打印字符
+            flush_buf()
+            # '&' 在 UTF-7 编码中是特殊字符，需要编码
+            if ch == '&':
+                result.append('&-')
+            else:
+                result.append(ch)
+        else:
+            # 非 ASCII 字符（中文等）
+            buf.append(ch)
+
+    flush_buf()
+    return ''.join(result)
+
+
+def _needs_imap_utf7_encode(mailbox: str) -> bool:
+    """判断文件夹名是否包含需要 UTF-7 编码的非 ASCII 字符。"""
+    return any(ord(ch) > 0x7E for ch in mailbox)
+
+
 def _quote_mailbox(mailbox: str) -> str:
     """为 IMAP 邮箱名添加引号，兼容 Proton Mail Bridge 等严格服务器。"""
     escaped = mailbox.replace("\\", "\\\\").replace('"', r"\"")
@@ -124,13 +164,16 @@ class EmailClient:
         """
         IMAP 操作统一上下文管理器。
         自动处理：连接等待 → 登录 → 发送 ID → 选择邮箱 → 返回客户端 → 最后登出/关闭。
+        支持传入中文文件夹名（自动编码为 IMAP UTF-7）或已编码的 UTF-7 名称。
         """
         imap = self._imap_connect()
         try:
             await asyncio.wait_for(imap.wait_hello_from_server(), timeout=10.0)
             await asyncio.wait_for(imap.login(self.email_server.user_name, self.email_server.password), timeout=10.0)
             await _send_imap_id(imap)
-            await asyncio.wait_for(imap.select(_quote_mailbox(mailbox)), timeout=10.0)
+            # 自动将中文文件夹名编码为 IMAP UTF-7
+            imap_mailbox = _encode_imap_utf7(mailbox) if _needs_imap_utf7_encode(mailbox) else mailbox
+            await asyncio.wait_for(imap.select(_quote_mailbox(imap_mailbox)), timeout=10.0)
             yield imap
         finally:
             # 安全关闭：只尝试 logout，不强制操作底层 transport
@@ -382,7 +425,7 @@ class EmailClient:
         cleaned = re.sub(r'[\r\n\\/:*?"<>|]', '_', filename).strip()
         return cleaned
 
-    def _extract_body_from_message(self, msg, cache_attachments: bool, email_id: str | None, cache_dir: str | None):
+    def _extract_body_from_message(self, msg, cache_attachments: bool, email_id: str | None, cache_dir: str | None, mailbox: str = "INBOX"):
         """从 email.message.Message 对象中提取正文和附件列表。"""
         body = ""
         html_body = ""
@@ -399,7 +442,8 @@ class EmailClient:
                     if filename:
                         if cache_attachments and email_id and cache_dir:
                             data = part.get_payload(decode=True)
-                            cache_path = Path(cache_dir) / email_id / filename
+                            safe_mailbox = mailbox.replace("/", "_").replace("\\", "_").replace(" ", "_")
+                            cache_path = Path(cache_dir) / safe_mailbox / email_id / filename
                             cache_path.parent.mkdir(parents=True, exist_ok=True)
                             cache_path.write_bytes(data)
                         attachments.append(filename)
@@ -449,6 +493,7 @@ class EmailClient:
             email_id: str | None = None,
             cache_attachments: bool = False,
             attachment_cache_dir: str | None = "attachments",
+            mailbox: str = "INBOX",
     ) -> dict[str, Any]:
         """将原始邮件字节解析为结构化字典。"""
         email_parser = email.parser.BytesFeedParser()
@@ -462,7 +507,7 @@ class EmailClient:
         message_id = msg.get("Message-ID")
 
         body, html_body, attachments = self._extract_body_from_message(
-            msg, cache_attachments, email_id, attachment_cache_dir
+            msg, cache_attachments, email_id, attachment_cache_dir, mailbox
         )
 
         return {
@@ -627,7 +672,7 @@ class EmailClient:
                     failed.append(uid)
                     continue
                 try:
-                    data = self._parse_email_data(raw, uid, cache_attachments, attachment_cache_dir)
+                    data = self._parse_email_data(raw, uid, cache_attachments, attachment_cache_dir, mailbox)
                     emails_content.append(
                         EmailBodyResponse(
                             email_id=data["email_id"],
@@ -892,8 +937,106 @@ class ClassicEmailHandler(EmailHandler):
         self._cache_lock = asyncio.Lock()
 
         # SQLite 替代 JSON 文件存储处理结果
-        self.db_proc_results = 'emails_proc_results.db'
+        self.db_proc_results = str(Path('cache') / 'emails_proc_results.db')
         self._db_initialized = False
+
+    @staticmethod
+    def _default_cache_file(mailbox: str = "INBOX") -> str:
+        """根据 mailbox 名称生成默认缓存文件名，统一存放在 cache/ 目录下。"""
+        safe = mailbox.replace("/", "_").replace("\\", "_").replace(" ", "_")
+        cache_dir = Path("cache")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return str(cache_dir / f"emails_{safe}.json")
+
+    @staticmethod
+    def _decode_imap_utf7(s: str) -> str:
+        """将 IMAP modified UTF-7 编码的文件夹名解码为可读字符串。
+
+        例如 '&UXZO1mWHTvZZOQ-' -> '历史邮件'
+        """
+        import base64
+
+        result = []
+        i = 0
+        while i < len(s):
+            if s[i] == '&':
+                # 找到编码段的结束标记 '-'
+                end = s.find('-', i + 1)
+                if end == -1:
+                    # 没有结束标记，按原样返回
+                    result.append(s[i:])
+                    break
+                if end == i + 1:
+                    # '&-' 表示字面量 '&'
+                    result.append('&')
+                else:
+                    # 解码 modified base64：将 ',' 替换回 '/'，补齐 padding
+                    b64 = s[i + 1:end].replace(',', '/')
+                    # 补齐 base64 padding
+                    padding = 4 - len(b64) % 4
+                    if padding != 4:
+                        b64 += '=' * padding
+                    decoded = base64.b64decode(b64).decode('utf-16-be')
+                    result.append(decoded)
+                i = end + 1
+            else:
+                result.append(s[i])
+                i += 1
+        return ''.join(result)
+
+    async def list_mailboxes(self) -> "UtilResponse":
+        """列出邮箱中所有可用的文件夹。"""
+        from mcp_email_server.emails.models import UtilResponse
+
+        imap = self.incoming_client._imap_connect()
+        try:
+            await asyncio.wait_for(imap.wait_hello_from_server(), timeout=10.0)
+            await asyncio.wait_for(imap.login(
+                self.incoming_client.email_server.user_name,
+                self.incoming_client.email_server.password,
+            ), timeout=10.0)
+            await _send_imap_id(imap)
+
+            _, response = await imap.list('""', "*")
+            folders = []
+            for item in response:
+                line = item.decode() if isinstance(item, bytes) else str(item)
+                # 跳过非文件夹行（如 "LIST completed"）
+                if not line.startswith('('):
+                    continue
+                # 解析 IMAP LIST 响应：(flags) "delimiter" "foldername"
+                # 示例：(\HasNoChildren) "/" "INBOX"
+                parts = line.rsplit('"', 2)
+                if len(parts) >= 3:
+                    folder_name = parts[-2]
+                    flags_part = parts[0]
+                    # 提取 flags：(\Flag1 \Flag2) -> ["\Flag1", "\Flag2"]
+                    flags = []
+                    for f in flags_part.strip("() ").split():
+                        if f.startswith("\\"):
+                            flags.append(f)
+                    folders.append({
+                        "name": folder_name,
+                        "display_name": self._decode_imap_utf7(folder_name),
+                        "flags": flags,
+                    })
+
+            return UtilResponse(
+                data={"mailboxes": folders},
+                message=f"找到 {len(folders)} 个文件夹",
+                success=True,
+            )
+        except Exception as e:
+            return UtilResponse(
+                data={"mailboxes": []},
+                message=f"列出文件夹失败: {e}",
+                success=False,
+            )
+        finally:
+            try:
+                await asyncio.wait_for(imap.logout(), timeout=5.0)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # 内部缓存工具方法 (保留 JSON 相关工具，因为其他方法仍在使用)
@@ -960,7 +1103,9 @@ class ClassicEmailHandler(EmailHandler):
         await ClassicEmailHandler._update_json_file(filename, updater)
 
     @staticmethod
-    async def _record_failed_uids(uids, reason="", filename='failed_emails.json'):
+    async def _record_failed_uids(uids, reason="", filename=None):
+        if filename is None:
+            filename = str(Path('cache') / 'failed_emails.json')
         if not uids:
             return
         now = datetime.now().isoformat()
@@ -1145,11 +1290,13 @@ class ClassicEmailHandler(EmailHandler):
             mailbox: str = "INBOX",
             use_cache: bool = True,
             update_cache: bool = True,
-            cache_file: str = 'emails.json',
+            cache_file: str | None = None,
             cache_attachments: bool = False,
             attachment_cache_dir: str | None = "attachments",
     ) -> UtilResponse:
         """获取单封邮件内容，支持本地缓存。"""
+        if cache_file is None:
+            cache_file = self._default_cache_file(mailbox)
         if use_cache:
             existing_cache = await self._load_json_file(cache_file)
             if email_id in existing_cache:
@@ -1177,11 +1324,13 @@ class ClassicEmailHandler(EmailHandler):
             mailbox: str = "INBOX",
             use_cache: bool = True,
             update_cache: bool = True,
-            cache_file: str = 'emails.json',
+            cache_file: str | None = None,
             cache_attachments: bool = False,
             attachment_cache_dir: str | None = "attachments",
     ) -> EmailContentBatchResponse:
         """批量获取邮件内容，优先从缓存读取。"""
+        if cache_file is None:
+            cache_file = self._default_cache_file(mailbox)
         emails = []
         failed = []
         missing = []
@@ -1263,7 +1412,7 @@ class ClassicEmailHandler(EmailHandler):
             all_uids = uids_resp.email_uid_list
             total_all = len(all_uids)
 
-            cache_file = 'emails.json'
+            cache_file = self._default_cache_file(mailbox)
             async with self._cache_lock:
                 cache_data = await self._load_json_file(cache_file)
                 existing_uids = set(cache_data.keys())
@@ -1354,11 +1503,12 @@ class ClassicEmailHandler(EmailHandler):
             "fileBase64": file_base64
         }
 
-    async def get_attachment_by_base64(self, email_id: str) -> UtilResponse:
-        """根据邮件 ID 读取本地缓存的附件，返回附件信息列表。"""
-        folder = Path(f"attachments/{email_id}")
+    async def get_attachment_by_base64(self, email_id: str, mailbox: str = "INBOX") -> UtilResponse:
+        """根据邮件 ID 和 mailbox 读取本地缓存的附件，返回附件信息列表。"""
+        safe_mailbox = mailbox.replace("/", "_").replace("\\", "_").replace(" ", "_")
+        folder = Path(f"attachments/{safe_mailbox}/{email_id}")
         if not folder.exists() or not folder.is_dir():
-            return UtilResponse(success=False, message=f"附件目录不存在: {email_id}", data=None)
+            return UtilResponse(success=False, message=f"附件目录不存在: {email_id} (mailbox: {mailbox})", data=None)
         attachments_info = []
         for file in folder.iterdir():
             if file.is_file():

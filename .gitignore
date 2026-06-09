@@ -142,3 +142,5 @@ cython_debug/
 tests/config.toml
 local/
 *config.toml
+data/
+docker-compose.override.yml

@@ -111,7 +111,7 @@ class EmailHandler(abc.ABC):
             mailbox: str = "INBOX",
             use_cache: bool = True,
             update_cache: bool = True,
-            cache_file: str = 'emails.json',
+            cache_file: str | None = None,
             cache_attachments: bool = True,
             attachment_cache_dir: str = "attachments"
     ) -> "EmailContentBatchResponse":
@@ -126,7 +126,7 @@ class EmailHandler(abc.ABC):
             mailbox: str = "INBOX",
             use_cache: bool = True,
             update_cache: bool = True,
-            cache_file: str = 'emails.json',
+            cache_file: str | None = None,
             cache_attachments: bool = True,
             attachment_cache_dir: str = "attachments",
     ) -> "UtilResponse":
@@ -212,7 +212,7 @@ class EmailHandler(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def get_attachment_by_base64(self, email_id: str) -> "UtilResponse":
+    async def get_attachment_by_base64(self, email_id: str, mailbox: str = "INBOX") -> "UtilResponse":
         """
         根据邮件 ID 获取附件的 base64 编码
         """
@@ -221,4 +221,10 @@ class EmailHandler(abc.ABC):
     async def save_proc_result(self, result: dict) -> "UtilResponse":
         """
         保存邮件处理结果
+        """
+
+    @abc.abstractmethod
+    async def list_mailboxes(self) -> "UtilResponse":
+        """
+        列出邮箱中所有可用的文件夹（如 INBOX、Sent、季度归档等）。
         """

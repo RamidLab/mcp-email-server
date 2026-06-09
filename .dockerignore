@@ -1,0 +1,73 @@
+# Git
+.git
+.github
+.gitignore
+
+# IDE
+.idea
+.vscode
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.egg-info
+dist
+build
+.eggs
+*.egg
+
+# Virtual environments
+.venv
+venv
+env
+
+# Dev/CI
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.tox
+.nox
+.coverage
+coverage.xml
+htmlcov
+.pre-commit-config.yaml
+codecov.yaml
+
+# Docs
+docs/site
+site
+
+# Test
+tests/
+pytest.ini
+tox.ini
+
+# Data files (mount as volumes instead)
+emails.json
+emails.json.tmp
+emails_bak*.json
+emails.zip
+emails_proc_results.*
+failed_emails.json
+attachments/
+attachments-*.zip
+*.db
+*.sqlite3
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Other
+*.md
+!README.md
+LICENSE
+Makefile
+mkdocs.yml
+smithery.yaml
+refer/
+local/
+test.py
+config/

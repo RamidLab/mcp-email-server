@@ -1,0 +1,33 @@
+services:
+  mcp-email-server:
+    build: .
+    container_name: mcp-email-server
+    restart: unless-stopped
+    ports:
+      - "${MCP_PORT:-9557}:9557"
+    volumes:
+      - ./config:/app/config
+      - ./attachments:/app/attachments
+      - ./cache:/app/cache
+    environment:
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=9557
+      - MCP_EMAIL_SERVER_CONFIG_PATH=/app/config/config.toml
+      # ── 可选：通过环境变量覆盖 config.toml 中的邮箱配置 ──
+      # - MCP_EMAIL_SERVER_ACCOUNT_NAME=default
+      # - MCP_EMAIL_SERVER_FULL_NAME=Your Name
+      # - MCP_EMAIL_SERVER_EMAIL_ADDRESS=you@example.com
+      # - MCP_EMAIL_SERVER_USER_NAME=you@example.com
+      # - MCP_EMAIL_SERVER_PASSWORD=your_password
+      # - MCP_EMAIL_SERVER_IMAP_HOST=imap.example.com
+      # - MCP_EMAIL_SERVER_IMAP_PORT=993
+      # - MCP_EMAIL_SERVER_SMTP_HOST=smtp.example.com
+      # - MCP_EMAIL_SERVER_SMTP_PORT=465
+      # - MCP_EMAIL_SERVER_ENABLE_ATTACHMENT_DOWNLOAD=true
+      # - MCP_EMAIL_SERVER_SAVE_TO_SENT=true
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',9557)); s.close()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

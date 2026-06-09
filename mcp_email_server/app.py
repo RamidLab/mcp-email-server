@@ -305,7 +305,7 @@ async def get_email_content(
         mailbox: Annotated[str, Field(default="INBOX", description="要检索邮件的邮箱文件夹。")] = "INBOX",
         use_cache: Annotated[bool, Field(default=True, description="是否使用本地缓存。")] = True,
         update_cache: Annotated[bool, Field(default=True, description="是否更新本地缓存。")] = True,
-        cache_file: Annotated[str, Field(default='emails.json', description="本地缓存文件路径。")] = 'emails.json',
+        cache_file: Annotated[str | None, Field(default=None, description="本地缓存文件路径。默认按 mailbox 名称自动生成。")] = None,
         cache_attachments: Annotated[bool, Field(default=False, description="是否将附件缓存到磁盘。")] = False,
         attachment_cache_dir: Annotated[
             str | None, Field(default="attachments", description="附件缓存目录。")] = "attachments",
@@ -331,7 +331,7 @@ async def get_emails_content(
         mailbox: Annotated[str, Field(default="INBOX", description="要检索邮件的邮箱文件夹。")] = "INBOX",
         use_cache: Annotated[bool, Field(default=True, description="是否使用本地缓存。")] = True,
         update_cache: Annotated[bool, Field(default=True, description="是否更新本地缓存。")] = True,
-        cache_file: Annotated[str, Field(default='emails.json', description="本地缓存文件路径。")] = 'emails.json',
+        cache_file: Annotated[str | None, Field(default=None, description="本地缓存文件路径。默认按 mailbox 名称自动生成。")] = None,
         cache_attachments: Annotated[bool, Field(default=False, description="是否将附件缓存到磁盘。")] = False,
         attachment_cache_dir: Annotated[
             str | None, Field(default="attachments", description="附件缓存目录。")] = "attachments",
@@ -483,9 +483,10 @@ async def get_cache_status(
 async def get_attachment_by_base64(
         account_name: Annotated[str, Field(description="邮件账户名称。")],
         email_id: Annotated[str, Field(description="邮件 ID（从 list_emails_metadata 或 get_emails_content 获得）。")],
+        mailbox: Annotated[str, Field(default="INBOX", description="邮件所在文件夹。")] = "INBOX",
 ) -> UtilResponse:
     handler = dispatch_handler(account_name)
-    return await handler.get_attachment_by_base64(email_id)
+    return await handler.get_attachment_by_base64(email_id, mailbox)
 
 @mcp.tool(
     title="保存邮件处理结果",
@@ -497,3 +498,14 @@ async def save_proc_result(
 ) -> UtilResponse:
     handler = dispatch_handler(account_name)
     return await handler.save_proc_result(result)
+
+
+@mcp.tool(
+    title="列出邮箱文件夹",
+    description="列出指定账户中所有可用的邮箱文件夹，包括收件箱、已发送、以及季度归档等自定义文件夹。"
+)
+async def list_mailboxes(
+        account_name: Annotated[str, Field(description="邮件账户名称。")],
+) -> UtilResponse:
+    handler = dispatch_handler(account_name)
+    return await handler.list_mailboxes()

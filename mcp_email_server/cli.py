@@ -31,7 +31,7 @@ def streamable_http(
     mcp.settings.host = host
     mcp.settings.port = port
     if hasattr(mcp.settings, 'transport_security') and mcp.settings.transport_security:
-        mcp.settings.transport_security.allowed_hosts.append('host.docker.internal:*')
+        mcp.settings.transport_security.enable_dns_rebinding_protection = False
     mcp.run(transport="streamable-http")
 
 
